@@ -4,10 +4,10 @@
 
 use core::fmt;
 use core::str::FromStr;
-use std::array::TryFromSliceError;
 #[cfg(feature = "mint")]
 use std::collections::BTreeMap;
 
+use base64::Engine;
 #[cfg(feature = "mint")]
 use bitcoin::bip32::DerivationPath;
 #[cfg(feature = "mint")]
@@ -31,50 +31,52 @@ use crate::util::hex;
 use crate::Amount;
 
 /// NUT02 Error
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq)]
 pub enum Error {
     /// Hex Error
     #[error(transparent)]
     HexError(#[from] hex::Error),
-    /// Keyset length error
+    /// Base64 Error
+    #[error(transparent)]
+    Base64Error(#[from] base64::DecodeError),
     #[error("NUT02: ID length invalid")]
+    /// Keyset length error
     Length,
-    /// Unknown version
+    /// Unknown version                                              
     #[error("NUT02: Unknown Version")]
     UnknownVersion,
-    /// Slice Error
-    #[error(transparent)]
-    Slice(#[from] TryFromSliceError),
 }
 
 /// Keyset version
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeySetVersion {
-    /// Current Version 00
+    /// Current Version 00   
     Version00,
-}
-
-impl KeySetVersion {
-    /// [`KeySetVersion`] to byte
-    pub fn to_byte(&self) -> u8 {
-        match self {
-            Self::Version00 => 0,
-        }
-    }
-
-    /// [`KeySetVersion`] from byte
-    pub fn from_byte(byte: &u8) -> Result<Self, Error> {
-        match byte {
-            0 => Ok(Self::Version00),
-            _ => Err(Error::UnknownVersion),
-        }
-    }
+    /// not std, only for compat for old base64Version
+    VersionBs,
 }
 
 impl fmt::Display for KeySetVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             KeySetVersion::Version00 => f.write_str("00"),
+            KeySetVersion::VersionBs => f.write_str("bs"),
+        }
+    }
+}
+
+impl KeySetVersion {
+    fn to_byte(&self) -> u8 {
+        match self {
+            Self::Version00 => 0,
+            Self::VersionBs => 0xff,
+        }
+    }
+    /// only use for token v4
+    pub(crate) fn from_byte(byte: &u8) -> Result<Self, Error> {
+        match byte {
+            0 => Ok(Self::Version00),
+            _ => Err(Error::UnknownVersion),
         }
     }
 }
@@ -86,23 +88,36 @@ impl fmt::Display for KeySetVersion {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Id {
     version: KeySetVersion,
-    id: [u8; Self::BYTELEN],
+    id: [u8; Self::STRLEN],
 }
 
 impl Id {
     const STRLEN: usize = 14;
-    const BYTELEN: usize = 7;
+    const STRLEN_BASE64: usize = 12;
 
-    /// [`Id`] to bytes
-    pub fn to_bytes(&self) -> Vec<u8> {
-        [vec![self.version.to_byte()], self.id.to_vec()].concat()
+    /// [`Id`] to bytes                                             
+    pub fn to_bytes(&self) -> Result<Vec<u8>, Error> {
+        let bytes = if self.version == KeySetVersion::VersionBs {
+            return Err(Error::UnknownVersion);
+        } else {
+            let bs = &self.id[..Self::STRLEN];
+            hex::decode(bs)?
+        };
+
+        Ok([vec![self.version.to_byte()], bytes].concat())
     }
 
     /// [`Id`] from bytes
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
+        if bytes.len() < 2 {
+            return Err(Error::Length);
+        }
+        let version = KeySetVersion::from_byte(&bytes[0])?;
+        let id = hex::encode(&bytes[1..]);
+
         Ok(Self {
-            version: KeySetVersion::from_byte(&bytes[0])?,
-            id: bytes[1..].try_into()?,
+            version,
+            id: id.as_bytes().try_into().map_err(|_| Error::Length)?,
         })
     }
 }
@@ -110,7 +125,13 @@ impl Id {
 impl TryFrom<Id> for u64 {
     type Error = Error;
     fn try_from(value: Id) -> Result<Self, Self::Error> {
-        let hex_bytes: [u8; 8] = value.to_bytes().try_into().map_err(|_| Error::Length)?;
+        if value.version == KeySetVersion::VersionBs {
+            return Err(Error::Length);
+        }
+
+        let hex_bytes: [u8; 8] = hex::decode(value.to_string())?
+            .try_into()
+            .map_err(|_| Error::Length)?;
 
         let int = u64::from_be_bytes(hex_bytes);
 
@@ -120,7 +141,15 @@ impl TryFrom<Id> for u64 {
 
 impl fmt::Display for Id {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&format!("{}{}", self.version, hex::encode(self.id)))
+        if self.version == KeySetVersion::VersionBs {
+            return f.write_str(std::str::from_utf8(&self.id[..Self::STRLEN_BASE64]).unwrap());
+        }
+
+        f.write_str(&format!(
+            "{}{}",
+            self.version,
+            String::from_utf8(self.id.to_vec()).map_err(|_| fmt::Error)?
+        ))
     }
 }
 
@@ -130,14 +159,24 @@ impl FromStr for Id {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         // Check if the string length is valid
         if s.len() != 16 {
+            if s.len() == 12 {
+                let _bytes = base64::engine::general_purpose::STANDARD.decode(s)?;
+                let mut id = [0u8; Self::STRLEN];
+                id[0..Self::STRLEN_BASE64].copy_from_slice(s[0..Self::STRLEN_BASE64].as_bytes());
+
+                let it = Self {
+                    version: KeySetVersion::VersionBs,
+                    id,
+                };
+                return Ok(it);
+            }
+
             return Err(Error::Length);
         }
 
         Ok(Self {
             version: KeySetVersion::Version00,
-            id: hex::decode(&s[2..])?
-                .try_into()
-                .map_err(|_| Error::Length)?,
+            id: s[2..].as_bytes().try_into().map_err(|_| Error::Length)?,
         })
     }
 }
@@ -177,7 +216,13 @@ impl<'de> Deserialize<'de> for Id {
                         v.len(),
                         v
                     )),
-                    _ => E::custom(e),
+                    Error::UnknownVersion => E::custom(format!(
+                        "Invalid Version: Expected {}, got {}",
+                        KeySetVersion::Version00,
+                        v
+                    )),
+                    Error::HexError(e) => E::custom(e),
+                    Error::Base64Error(e) => E::custom(e),
                 })
             }
         }
@@ -197,11 +242,9 @@ impl From<&Keys> for Id {
             5 - prefix it with a keyset ID version byte
         */
 
-        let mut keys: Vec<(&String, &super::PublicKey)> = map.iter().collect();
+        // Note: Keys are a BTreeMap so are already sorted by amount in ascending order
 
-        keys.sort_by_key(|(k, _v)| u64::from_str(k).unwrap());
-
-        let pubkeys_concat: Vec<u8> = keys
+        let pubkeys_concat: Vec<u8> = map
             .iter()
             .map(|(_, pubkey)| pubkey.to_bytes())
             .collect::<Vec<[u8; 33]>>()
@@ -209,17 +252,13 @@ impl From<&Keys> for Id {
 
         let hash = Sha256::hash(&pubkeys_concat);
         let hex_of_hash = hex::encode(hash.to_byte_array());
-
+        // First 9 bytes of hash will encode as the first 12 Base64 characters later
         Self {
             version: KeySetVersion::Version00,
-            id: hex::decode(&hex_of_hash[0..Self::STRLEN])
-                .expect("Keys hash could not be hex decoded")
-                .try_into()
-                .expect("Invalid length of hex id"),
+            id: hex_of_hash[0..Self::STRLEN].as_bytes().try_into().unwrap(),
         }
     }
 }
-
 /// Mint Keysets [NUT-02]
 /// Ids of mints keyset ids
 #[serde_as]
@@ -509,7 +548,7 @@ mod test {
     fn test_keyset_bytes() {
         let id = Id::from_str("009a1f293253e41e").unwrap();
 
-        let id_bytes = id.to_bytes();
+        let id_bytes = id.to_bytes().unwrap();
 
         assert_eq!(id_bytes.len(), 8);
 

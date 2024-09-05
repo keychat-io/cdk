@@ -397,7 +397,7 @@ fn serialize_v4_keyset_id<S>(keyset_id: &Id, serializer: S) -> Result<S::Ok, S::
 where
     S: serde::Serializer,
 {
-    serializer.serialize_bytes(&keyset_id.to_bytes())
+    serializer.serialize_bytes(&keyset_id.to_bytes().unwrap())
 }
 
 fn deserialize_v4_keyset_id<'de, D>(deserializer: D) -> Result<Id, D::Error>
