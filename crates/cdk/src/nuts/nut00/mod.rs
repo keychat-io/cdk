@@ -192,11 +192,19 @@ pub struct Proof {
     #[serde(rename = "C")]
     pub c: PublicKey,
     /// Witness
+    #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub witness: Option<Witness>,
     /// DLEQ Proof
+    #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dleq: Option<ProofDleq>,
+}
+
+impl AsRef<Proof> for Proof {
+    fn as_ref(&self) -> &Proof {
+        &self
+    }
 }
 
 impl Proof {
@@ -258,7 +266,9 @@ pub struct ProofV4 {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub witness: Option<Witness>,
     /// DLEQ Proof
+    #[serde(default)]
     #[serde(rename = "d")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub dleq: Option<ProofDleq>,
 }
 
@@ -323,6 +333,18 @@ pub enum CurrencyUnit {
     Usd,
     /// Euro
     Eur,
+}
+
+impl CurrencyUnit {
+    /// as str
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Sat => "sat",
+            Self::Msat => "msat",
+            Self::Usd => "usd",
+            Self::Eur => "eur",
+        }
+    }
 }
 
 #[cfg(feature = "mint")]

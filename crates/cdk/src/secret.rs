@@ -55,6 +55,11 @@ impl Secret {
         Self(secret)
     }
 
+    /// [`Secret`] as str
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
     /// [`Secret`] as bytes
     #[inline]
     pub fn as_bytes(&self) -> &[u8] {

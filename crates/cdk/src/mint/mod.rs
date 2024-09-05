@@ -1221,6 +1221,7 @@ impl Mint {
         Ok(RestoreResponse {
             outputs,
             signatures,
+            promises: Default::default(),
         })
     }
 

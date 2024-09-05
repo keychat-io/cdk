@@ -19,9 +19,12 @@ pub struct RestoreResponse {
     /// Outputs
     pub outputs: Vec<BlindedMessage>,
     /// Signatures
-    // TODO: remove rename just for temp compatanlite with nutshell
-    #[serde(rename = "promises")]
+    // #[serde(rename = "promises")]
+    #[serde(default)]
     pub signatures: Vec<BlindSignature>,
+    /// TODO: remove rename just for temp compatanlite with nutshell
+    #[serde(default)]
+    pub promises: Vec<BlindSignature>,
 }
 
 mod test {
