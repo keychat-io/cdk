@@ -269,7 +269,7 @@ pub struct ProofV4 {
     #[serde(default)]
     #[serde(rename = "d")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub dleq: Option<ProofDleq>,
+    pub dleq: Option<ProofDleqV4>,
 }
 
 impl ProofV4 {
@@ -281,7 +281,7 @@ impl ProofV4 {
             secret: self.secret.clone(),
             c: self.c,
             witness: self.witness.clone(),
-            dleq: self.dleq.clone(),
+            dleq: self.dleq.clone().map(|d| d.into()),
         }
     }
 }
@@ -301,7 +301,7 @@ impl From<Proof> for ProofV4 {
             secret,
             c,
             witness,
-            dleq,
+            dleq: dleq.map(|d| d.into()),
         }
     }
 }
@@ -319,6 +319,64 @@ where
 {
     let bytes = Vec::<u8>::deserialize(deserializer)?;
     PublicKey::from_slice(&bytes).map_err(serde::de::Error::custom)
+}
+
+/// Proof Dleq
+///
+/// Defined in [NUT12](https://github.com/cashubtc/nuts/blob/main/12.md)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProofDleqV4 {
+    /// e
+    #[serde(
+        serialize_with = "serialize_v4_seckey",
+        deserialize_with = "deserialize_v4_seckey"
+    )]
+    pub e: SecretKey,
+    /// s
+    #[serde(
+        serialize_with = "serialize_v4_seckey",
+        deserialize_with = "deserialize_v4_seckey"
+    )]
+    pub s: SecretKey,
+    /// Blinding factor
+    #[serde(
+        serialize_with = "serialize_v4_seckey",
+        deserialize_with = "deserialize_v4_seckey"
+    )]
+    pub r: SecretKey,
+}
+fn serialize_v4_seckey<S>(key: &SecretKey, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_bytes(&key.to_secret_bytes())
+}
+
+fn deserialize_v4_seckey<'de, D>(deserializer: D) -> Result<SecretKey, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let bytes = Vec::<u8>::deserialize(deserializer)?;
+    SecretKey::from_slice(&bytes).map_err(serde::de::Error::custom)
+}
+
+impl From<ProofDleq> for ProofDleqV4 {
+    fn from(d: ProofDleq) -> Self {
+        ProofDleqV4 {
+            e: d.e,
+            s: d.s,
+            r: d.r,
+        }
+    }
+}
+impl From<ProofDleqV4> for ProofDleq {
+    fn from(d: ProofDleqV4) -> Self {
+        ProofDleq {
+            e: d.e,
+            s: d.s,
+            r: d.r,
+        }
+    }
 }
 
 /// Currency Unit
