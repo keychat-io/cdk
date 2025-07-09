@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 
 use cdk_common::util::unix_time;
-use cdk_common::wallet::{Transaction, TransactionDirection};
+use cdk_common::wallet::{Transaction, TransactionDirection, TransactionKind};
 use tracing::instrument;
 
 use super::SendKind;
@@ -282,6 +282,7 @@ impl Wallet {
             .add_transaction(Transaction {
                 mint_url: self.mint_url.clone(),
                 direction: TransactionDirection::Outgoing,
+                kind: TransactionKind::Cashu,
                 amount: send.amount,
                 fee: total_send_fee,
                 unit: self.unit.clone(),

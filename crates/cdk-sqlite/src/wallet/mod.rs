@@ -12,7 +12,9 @@ use cdk_common::database::WalletDatabase;
 use cdk_common::mint_url::MintUrl;
 use cdk_common::nuts::{MeltQuoteState, MintQuoteState};
 use cdk_common::secret::Secret;
-use cdk_common::wallet::{self, MintQuote, Transaction, TransactionDirection, TransactionId};
+use cdk_common::wallet::{
+    self, MintQuote, Transaction, TransactionDirection, TransactionId, TransactionKind,
+};
 use cdk_common::{
     database, Amount, CurrencyUnit, Id, KeySet, KeySetInfo, Keys, MintInfo, Proof, ProofDleq,
     PublicKey, SecretKey, SpendingConditions, State,
@@ -872,9 +874,68 @@ ON CONFLICT(id) DO UPDATE SET
     }
 
     #[instrument(skip(self))]
+    async fn list_transactions_with_kind_offset(
+        &self,
+        offset: usize,
+        limit: usize,
+        kinds: &[TransactionKind],
+        mint_url: Option<MintUrl>,
+        direction: Option<TransactionDirection>,
+        unit: Option<CurrencyUnit>,
+    ) -> Result<Vec<Transaction>, Self::Err> {
+        let ks_slice = kinds
+            .iter()
+            .map(|s| format!("'{:?}'", s.to_owned()))
+            .collect::<Vec<_>>();
+        // let ks_array = ks_slice.join(",");
+        Ok(Statement::new(
+            r#"
+            SELECT
+                mint_url,
+                direction,
+                unit,
+                amount,
+                fee,
+                ys,
+                timestamp,
+                memo,
+                metadata
+            FROM
+                transactions where kind IN (:kinds) order by timestamp desc limit :l offset :o
+            "#,
+        )
+        .bind_vec(":kinds", ks_slice)
+        .bind(":l", limit as i64)
+        .bind(":o", offset as i64)
+        .fetch_all(&self.pool.get().map_err(Error::Pool)?)
+        .map_err(Error::Sqlite)?
+        .into_iter()
+        .filter_map(|row| {
+            // TODO: Avoid a table scan by passing the heavy lifting of checking to the DB engine
+            let transaction = sqlite_row_to_transaction(row).ok()?;
+            if transaction.matches_conditions(&mint_url, &direction, &unit) {
+                Some(transaction)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>())
+    }
+
+    #[instrument(skip(self))]
     async fn remove_transaction(&self, transaction_id: TransactionId) -> Result<(), Self::Err> {
         Statement::new(r#"DELETE FROM transactions WHERE id=:id"#)
             .bind(":id", transaction_id.as_slice().to_vec())
+            .execute(&self.pool.get().map_err(Error::Pool)?)
+            .map_err(Error::Sqlite)?;
+
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    async fn remove_transactions(&self, unix_timestamp_le: u64) -> Result<(), Self::Err> {
+        Statement::new(r#"DELETE FROM transactions WHERE timestamp <=:ts"#)
+            .bind(":ts", unix_timestamp_le as i64)
             .execute(&self.pool.get().map_err(Error::Pool)?)
             .map_err(Error::Sqlite)?;
 
@@ -1064,6 +1125,7 @@ fn sqlite_row_to_transaction(row: Vec<Column>) -> Result<Transaction, Error> {
         let (
             mint_url,
             direction,
+            kind,
             unit,
             amount,
             fee,
@@ -1080,6 +1142,7 @@ fn sqlite_row_to_transaction(row: Vec<Column>) -> Result<Transaction, Error> {
     Ok(Transaction {
         mint_url: column_as_string!(mint_url, MintUrl::from_str),
         direction: column_as_string!(direction, TransactionDirection::from_str),
+        kind: column_as_string!(kind, TransactionKind::from_str),
         unit: column_as_string!(unit, CurrencyUnit::from_str),
         amount: Amount::from(amount),
         fee: Amount::from(fee),

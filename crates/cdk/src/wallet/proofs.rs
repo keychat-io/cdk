@@ -26,6 +26,35 @@ impl Wallet {
         self.get_proofs_with(Some(vec![State::Pending]), None).await
     }
 
+    /// Get spent [`Proofs`]
+    #[instrument(skip(self))]
+    pub async fn get_spent_proofs(&self) -> Result<Proofs, Error> {
+        self.get_proofs_with(Some(vec![State::Spent]), None).await
+    }
+
+    /// Get Pending and PendingSpent [`Proofs`]
+    #[instrument(skip(self))]
+    pub async fn get_all_pending_proofs(&self) -> Result<Proofs, Error> {
+        self.get_proofs_with(Some(vec![State::Pending, State::PendingSpent,]), None).await
+    }
+
+
+    /// Get all [`Proofs`]
+    #[instrument(skip(self))]
+    pub async fn get_all_proofs(&self) -> Result<Proofs, Error> {
+        self.get_proofs_with(
+            Some(vec![
+                State::Spent,
+                State::Unspent,
+                State::Pending,
+                State::PendingSpent,
+                State::Reserved,
+            ]),
+            None,
+        )
+        .await
+    }
+
     /// Get reserved [`Proofs`]
     #[instrument(skip(self))]
     pub async fn get_reserved_proofs(&self) -> Result<Proofs, Error> {

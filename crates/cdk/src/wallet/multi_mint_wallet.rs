@@ -10,7 +10,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use cdk_common::database;
 use cdk_common::database::WalletDatabase;
-use cdk_common::wallet::{Transaction, TransactionDirection, WalletKey};
+use cdk_common::wallet::{Transaction, TransactionDirection, TransactionKind, WalletKey};
 use tokio::sync::RwLock;
 use tracing::instrument;
 
@@ -129,7 +129,7 @@ impl MultiMintWallet {
         Ok(balances)
     }
 
-    /// List proofs.
+    /// List unpent proofs.
     #[instrument(skip(self))]
     pub async fn list_proofs(
         &self,
@@ -138,6 +138,62 @@ impl MultiMintWallet {
 
         for (WalletKey { mint_url, unit: u }, wallet) in self.wallets.read().await.iter() {
             let wallet_proofs = wallet.get_unspent_proofs().await?;
+            mint_proofs.insert(mint_url.clone(), (wallet_proofs, u.clone()));
+        }
+        Ok(mint_proofs)
+    }
+
+    /// List all proofs.
+    #[instrument(skip(self))]
+    pub async fn list_all_proofs(
+        &self,
+    ) -> Result<BTreeMap<MintUrl, (Vec<Proof>, CurrencyUnit)>, Error> {
+        let mut mint_proofs = BTreeMap::new();
+
+        for (WalletKey { mint_url, unit: u }, wallet) in self.wallets.read().await.iter() {
+            let wallet_proofs = wallet.get_all_proofs().await?;
+            mint_proofs.insert(mint_url.clone(), (wallet_proofs, u.clone()));
+        }
+        Ok(mint_proofs)
+    }
+
+    /// List spent proofs.
+    #[instrument(skip(self))]
+    pub async fn list_spent_proofs(
+        &self,
+    ) -> Result<BTreeMap<MintUrl, (Vec<Proof>, CurrencyUnit)>, Error> {
+        let mut mint_proofs = BTreeMap::new();
+
+        for (WalletKey { mint_url, unit: u }, wallet) in self.wallets.read().await.iter() {
+            let wallet_proofs = wallet.get_spent_proofs().await?;
+            mint_proofs.insert(mint_url.clone(), (wallet_proofs, u.clone()));
+        }
+        Ok(mint_proofs)
+    }
+
+    /// List spent proofs.
+    #[instrument(skip(self))]
+    pub async fn list_pending_proofs(
+        &self,
+    ) -> Result<BTreeMap<MintUrl, (Vec<Proof>, CurrencyUnit)>, Error> {
+        let mut mint_proofs = BTreeMap::new();
+
+        for (WalletKey { mint_url, unit: u }, wallet) in self.wallets.read().await.iter() {
+            let wallet_proofs = wallet.get_pending_proofs().await?;
+            mint_proofs.insert(mint_url.clone(), (wallet_proofs, u.clone()));
+        }
+        Ok(mint_proofs)
+    }
+
+    /// List spent proofs.
+    #[instrument(skip(self))]
+    pub async fn list_all_pending_proofs(
+        &self,
+    ) -> Result<BTreeMap<MintUrl, (Vec<Proof>, CurrencyUnit)>, Error> {
+        let mut mint_proofs = BTreeMap::new();
+
+        for (WalletKey { mint_url, unit: u }, wallet) in self.wallets.read().await.iter() {
+            let wallet_proofs = wallet.get_all_pending_proofs().await?;
             mint_proofs.insert(mint_url.clone(), (wallet_proofs, u.clone()));
         }
         Ok(mint_proofs)
@@ -159,6 +215,82 @@ impl MultiMintWallet {
         transactions.sort();
 
         Ok(transactions)
+    }
+
+    /// List transactions with kind and offset
+    #[instrument(skip(self))]
+    pub async fn list_transactions_with_kind_offset(
+        &self,
+        offset: usize,
+        limit: usize,
+        kind: &[TransactionKind],
+        direction: Option<TransactionDirection>,
+    ) -> Result<Vec<Transaction>, Error> {
+        let mut transactions = Vec::new();
+
+        for (_, wallet) in self.wallets.read().await.iter() {
+            let wallet_transactions = wallet.list_transactions_with_kind_offset(offset, limit, kind, direction).await?;
+            transactions.extend(wallet_transactions);
+        }
+
+        transactions.sort();
+
+        Ok(transactions)
+    }
+
+    /// List pending transactions with kind
+    #[instrument(skip(self))]
+    pub async fn list_pending_transactions_with_kind(
+        &self,
+        kind: &[TransactionKind],
+        direction: Option<TransactionDirection>,
+    ) -> Result<Vec<Transaction>, Error> {
+        let mut transactions = Vec::new();
+
+        for (_, wallet) in self.wallets.read().await.iter() {
+            let wallet_transactions = wallet.list_pending_transactions().await?;
+            for t in wallet_transactions {
+                if kind.contains(&t.kind) {
+                    transactions.push(t);
+                }
+            }
+            // transactions.extend(wallet_transactions);
+        }
+
+        transactions.sort();
+
+        Ok(transactions)
+    }
+
+    /// remove transactions by timestamp
+    #[instrument(skip(self))]
+    pub async fn remove_transactions(
+        &self,
+        unix_timestamp_le: u64,
+    ) -> Result<(), Error> {
+
+        for (_, wallet) in self.wallets.read().await.iter() {
+            wallet.remove_transactions(unix_timestamp_le).await?;
+        }
+
+        Ok(())
+    }
+
+    /// check pending proofs
+    pub async fn check_pending(&self) -> Result<()> {
+        for (_, wallet) in self.wallets.read().await.iter() {
+            // Get all pending proofs
+            let pending_proofs = wallet.get_pending_proofs().await?;
+            if pending_proofs.is_empty() {
+                continue;
+            }
+            // Try to reclaim any proofs that are no longer pending
+            match wallet.reclaim_unspent(pending_proofs).await {
+                Ok(()) => println!("Successfully reclaimed pending proofs"),
+                Err(e) => println!("Error reclaimed pending proofs: {e}"),
+            }
+        }
+        Ok(())
     }
 
     /// Prepare to send

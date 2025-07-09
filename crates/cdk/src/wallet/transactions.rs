@@ -1,4 +1,4 @@
-use cdk_common::wallet::{Transaction, TransactionDirection, TransactionId};
+use cdk_common::wallet::{Transaction, TransactionDirection, TransactionId, TransactionKind};
 
 use crate::{Error, Wallet};
 
@@ -20,6 +20,65 @@ impl Wallet {
         transactions.sort();
 
         Ok(transactions)
+    }
+
+    /// list transactions with kind and offset
+    pub async fn list_transactions_with_kind_offset(
+        &self,
+        offset: usize,
+        limit: usize,
+        kind: &[TransactionKind],
+        direction: Option<TransactionDirection>,
+    ) -> Result<Vec<Transaction>, Error> {
+        let mut transactions = self
+            .localstore
+            .list_transactions_with_kind_offset(
+                offset,
+                limit,
+                kind,
+                Some(self.mint_url.clone()),
+                direction,
+                Some(self.unit.clone()),
+            )
+            .await?;
+
+        transactions.sort();
+
+        Ok(transactions)
+    }
+
+    /// list pending transactions with kind
+    pub async fn list_pending_transactions(&self) -> Result<Vec<Transaction>, Error> {
+        let all_txs = self.list_transactions(None).await?;
+        let all_pending_proofs = self.get_all_pending_proofs().await?;
+        // let pending_spent_proofs = 
+        //     all_pending_proofs
+        //     .into_iter()
+        //     .filter(|p| match p.y() {
+        //         Ok(y) => tx.ys.contains(&y),
+        //         Err(_) => false,
+        //     })
+        //     .collect::<Vec<_>>();
+        // find all pending_txs
+        let pending_txs= all_txs
+        .into_iter()
+        .filter(|tx| {
+            all_pending_proofs.iter().any(|p| {
+                match p.y() {
+                    Ok(y) => tx.ys.contains(&y),
+                    Err(_) => false,
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+        Ok(pending_txs)
+    }
+
+
+    /// Get transaction by ID
+    pub async fn remove_transactions(&self, unix_timestamp_le: u64,) -> Result<(), Error> {
+        self.localstore.remove_transactions(unix_timestamp_le).await?;
+        Ok(())
     }
 
     /// Get transaction by ID

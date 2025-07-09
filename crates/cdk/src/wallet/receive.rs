@@ -5,7 +5,7 @@ use bitcoin::hashes::sha256::Hash as Sha256Hash;
 use bitcoin::hashes::Hash;
 use bitcoin::XOnlyPublicKey;
 use cdk_common::util::unix_time;
-use cdk_common::wallet::{Transaction, TransactionDirection};
+use cdk_common::wallet::{Transaction, TransactionDirection, TransactionKind};
 use tracing::instrument;
 
 use crate::amount::SplitTarget;
@@ -170,6 +170,7 @@ impl Wallet {
             .add_transaction(Transaction {
                 mint_url: self.mint_url.clone(),
                 direction: TransactionDirection::Incoming,
+                kind: TransactionKind::Cashu,
                 amount: total_amount,
                 fee: proofs_amount - total_amount,
                 unit: self.unit.clone(),

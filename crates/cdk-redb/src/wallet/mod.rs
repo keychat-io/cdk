@@ -11,7 +11,9 @@ use cdk_common::common::ProofInfo;
 use cdk_common::database::WalletDatabase;
 use cdk_common::mint_url::MintUrl;
 use cdk_common::util::unix_time;
-use cdk_common::wallet::{self, MintQuote, Transaction, TransactionDirection, TransactionId};
+use cdk_common::wallet::{
+    self, MintQuote, Transaction, TransactionDirection, TransactionId, TransactionKind,
+};
 use cdk_common::{
     database, CurrencyUnit, Id, KeySet, KeySetInfo, Keys, MintInfo, PublicKey, SpendingConditions,
     State,
@@ -768,6 +770,28 @@ impl WalletDatabase for WalletRedbDatabase {
     }
 
     #[instrument(skip(self))]
+    async fn list_transactions_with_kind_offset(
+        &self,
+        offset: usize,
+        limit: usize,
+        kind: &[TransactionKind],
+        mint_url: Option<MintUrl>,
+        direction: Option<TransactionDirection>,
+        unit: Option<CurrencyUnit>,
+    ) -> Result<Vec<Transaction>, Self::Err> {
+        // TODO: Implement actual logic
+        // For now, return an empty Vec or a basic filter over list_transactions
+        let all = self.list_transactions(mint_url, direction, unit).await?;
+        let filtered: Vec<_> = all
+            .into_iter()
+            .filter(|tx| kind.contains(&tx.kind))
+            .skip(offset)
+            .take(limit)
+            .collect();
+        Ok(filtered)
+    }
+
+    #[instrument(skip(self))]
     async fn remove_transaction(&self, transaction_id: TransactionId) -> Result<(), Self::Err> {
         let write_txn = self.db.begin_write().map_err(Error::from)?;
 
@@ -778,6 +802,37 @@ impl WalletDatabase for WalletRedbDatabase {
             table
                 .remove(transaction_id.as_slice())
                 .map_err(Error::from)?;
+        }
+
+        write_txn.commit().map_err(Error::from)?;
+
+        Ok(())
+    }
+    #[instrument(skip(self))]
+    async fn remove_transactions(&self, unix_timestamp_le: u64) -> Result<(), Self::Err> {
+        let write_txn = self.db.begin_write().map_err(Error::from)?;
+
+        {
+            let mut table = write_txn
+                .open_table(TRANSACTIONS_TABLE)
+                .map_err(Error::from)?;
+            let keys_to_remove: Vec<Vec<u8>> = table
+                .iter()
+                .map_err(Error::from)?
+                .filter_map(|entry| {
+                    let (key, value) = entry.ok()?;
+                    let tx: Transaction = serde_json::from_str(value.value()).ok()?;
+                    if tx.timestamp < unix_timestamp_le {
+                        Some(key.value().to_vec())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            for key in keys_to_remove {
+                table.remove(key.as_slice()).map_err(Error::from)?;
+            }
         }
 
         write_txn.commit().map_err(Error::from)?;

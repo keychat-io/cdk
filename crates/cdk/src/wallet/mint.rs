@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use cdk_common::nut04::MintMethodOptions;
-use cdk_common::wallet::{Transaction, TransactionDirection};
+use cdk_common::wallet::{Transaction, TransactionDirection, TransactionKind};
 use tracing::instrument;
 
 use super::MintQuote;
@@ -296,6 +296,7 @@ impl Wallet {
             .add_transaction(Transaction {
                 mint_url: self.mint_url.clone(),
                 direction: TransactionDirection::Incoming,
+                kind: TransactionKind::LN,
                 amount: proofs.total_amount()?,
                 fee: Amount::ZERO,
                 unit: self.unit.clone(),

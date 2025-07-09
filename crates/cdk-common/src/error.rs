@@ -231,6 +231,9 @@ pub enum Error {
     /// Invalid transaction direction
     #[error("Invalid transaction direction")]
     InvalidTransactionDirection,
+    /// Invalid transaction kind
+    #[error("Invalid transaction kind")]
+    InvalidTransactionKind,
     /// Invalid transaction id
     #[error("Invalid transaction id")]
     InvalidTransactionId,
