@@ -2,7 +2,7 @@
 CREATE TABLE IF NOT EXISTS transactions (
     id BLOB PRIMARY KEY,
     mint_url TEXT NOT NULL,
-    direction TEXT CHECK (direction IN ('Incoming', 'Outgoing')) NOT NULL,
+    direction TEXT CHECK (direction IN ('Incoming', 'Outgoing', 'Split')) NOT NULL,
     amount INTEGER NOT NULL,
     fee INTEGER NOT NULL,
     unit TEXT NOT NULL,

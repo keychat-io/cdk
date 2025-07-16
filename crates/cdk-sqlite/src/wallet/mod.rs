@@ -758,6 +758,7 @@ ON CONFLICT(id) DO UPDATE SET
     async fn add_transaction(&self, transaction: Transaction) -> Result<(), Self::Err> {
         let mint_url = transaction.mint_url.to_string();
         let direction = transaction.direction.to_string();
+        let kind = transaction.kind.to_string();
         let unit = transaction.unit.to_string();
         let amount = u64::from(transaction.amount) as i64;
         let fee = u64::from(transaction.fee) as i64;
@@ -770,12 +771,13 @@ ON CONFLICT(id) DO UPDATE SET
         Statement::new(
             r#"
 INSERT INTO transactions
-(id, mint_url, direction, unit, amount, fee, ys, timestamp, memo, metadata)
+(id, mint_url, direction, kind, unit, amount, fee, ys, timestamp, memo, metadata)
 VALUES
-(:id, :mint_url, :direction, :unit, :amount, :fee, :ys, :timestamp, :memo, :metadata)
+(:id, :mint_url, :direction, :kind, :unit, :amount, :fee, :ys, :timestamp, :memo, :metadata)
 ON CONFLICT(id) DO UPDATE SET
     mint_url = excluded.mint_url,
     direction = excluded.direction,
+    kind = excluded.kind,
     unit = excluded.unit,
     amount = excluded.amount,
     fee = excluded.fee,
@@ -789,6 +791,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(":id", transaction.id().as_slice().to_vec())
         .bind(":mint_url", mint_url)
         .bind(":direction", direction)
+        .bind(":kind", kind)
         .bind(":unit", unit)
         .bind(":amount", amount)
         .bind(":fee", fee)
@@ -815,6 +818,7 @@ ON CONFLICT(id) DO UPDATE SET
             SELECT
                 mint_url,
                 direction,
+                kind,
                 unit,
                 amount,
                 fee,
@@ -847,6 +851,7 @@ ON CONFLICT(id) DO UPDATE SET
             SELECT
                 mint_url,
                 direction,
+                kind,
                 unit,
                 amount,
                 fee,
@@ -883,16 +888,12 @@ ON CONFLICT(id) DO UPDATE SET
         direction: Option<TransactionDirection>,
         unit: Option<CurrencyUnit>,
     ) -> Result<Vec<Transaction>, Self::Err> {
-        let ks_slice = kinds
-            .iter()
-            .map(|s| format!("'{:?}'", s.to_owned()))
-            .collect::<Vec<_>>();
-        // let ks_array = ks_slice.join(",");
         Ok(Statement::new(
             r#"
             SELECT
                 mint_url,
                 direction,
+                kind,
                 unit,
                 amount,
                 fee,
@@ -904,7 +905,7 @@ ON CONFLICT(id) DO UPDATE SET
                 transactions where kind IN (:kinds) order by timestamp desc limit :l offset :o
             "#,
         )
-        .bind_vec(":kinds", ks_slice)
+        .bind_vec(":kinds", kinds.iter().map(|k| k.to_string()).collect::<Vec<_>>())
         .bind(":l", limit as i64)
         .bind(":o", offset as i64)
         .fetch_all(&self.pool.get().map_err(Error::Pool)?)
