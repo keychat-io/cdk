@@ -133,7 +133,7 @@ impl Wallet {
                 let proofs = self
                     .mint(&mint_quote.id, SplitTarget::default(), None)
                     .await?;
-                total_amount += proofs.total_amount()?;
+                total_amount += proofs.0.total_amount()?;
             } else if mint_quote.expiry.le(&unix_time()) {
                 self.localstore.remove_mint_quote(&mint_quote.id).await?;
             }
@@ -179,7 +179,7 @@ impl Wallet {
         quote_id: &str,
         amount_split_target: SplitTarget,
         spending_conditions: Option<SpendingConditions>,
-    ) -> Result<Proofs, Error> {
+    ) -> Result<(Proofs, Transaction), Error> {
         // Check that mint is in store of mints
         if self
             .localstore
@@ -291,22 +291,21 @@ impl Wallet {
         // Add new proofs to store
         self.localstore.update_proofs(proof_infos, vec![]).await?;
 
+        let tx = Transaction {
+            mint_url: self.mint_url.clone(),
+            direction: TransactionDirection::Incoming,
+            kind: TransactionKind::LN,
+            amount: proofs.total_amount()?,
+            fee: Amount::ZERO,
+            unit: self.unit.clone(),
+            ys: proofs.ys()?,
+            timestamp: unix_time,
+            memo: None,
+            metadata: HashMap::new(),
+        };
         // Add transaction to store
-        self.localstore
-            .add_transaction(Transaction {
-                mint_url: self.mint_url.clone(),
-                direction: TransactionDirection::Incoming,
-                kind: TransactionKind::LN,
-                amount: proofs.total_amount()?,
-                fee: Amount::ZERO,
-                unit: self.unit.clone(),
-                ys: proofs.ys()?,
-                timestamp: unix_time,
-                memo: None,
-                metadata: HashMap::new(),
-            })
-            .await?;
+        self.localstore.add_transaction(tx.clone()).await?;
 
-        Ok(proofs)
+        Ok((proofs, tx))
     }
 }

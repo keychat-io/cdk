@@ -325,5 +325,6 @@ pub async fn fund_wallet(
     Ok(wallet
         .mint(&quote.id, split_target.unwrap_or_default(), None)
         .await?
+        .0
         .total_amount()?)
 }

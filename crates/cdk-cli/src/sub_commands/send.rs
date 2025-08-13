@@ -227,10 +227,10 @@ pub async fn send(
         true => {
             let token = token;
 
-            println!("{}", token.to_v3_string());
+            println!("{}", token.0.to_v3_string());
         }
         false => {
-            println!("{token}");
+            println!("{}", token.0);
         }
     }
 

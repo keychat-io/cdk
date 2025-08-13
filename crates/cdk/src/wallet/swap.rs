@@ -12,7 +12,6 @@ use cdk_common::wallet::{Transaction, TransactionDirection, TransactionKind};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 impl Wallet {
-
     /// swap with denomination
     #[instrument(skip(self, input_proofs))]
     pub async fn swap_denomination(
@@ -27,12 +26,7 @@ impl Wallet {
         let unit = &self.unit;
 
         let pre_swap = self
-            .create_swap_denomination(
-                denomination,
-                amount,
-                input_proofs.clone(),
-                include_fees,
-            )
+            .create_swap_denomination(denomination, amount, input_proofs.clone(), include_fees)
             .await?;
         let fee = pre_swap.fee;
         // println!("fee: {:?}", fee);
@@ -82,8 +76,7 @@ impl Wallet {
                     let mut amount_split = amount.split_targeted(&split_target)?;
 
                     for proof in all_proofs {
-                        if let Some(idx) = amount_split.iter().position(|&a| a == proof.amount)
-                        {
+                        if let Some(idx) = amount_split.iter().position(|&a| a == proof.amount) {
                             proofs_to_send.push(proof);
                             amount_split.remove(idx);
                         } else {
@@ -128,7 +121,8 @@ impl Wallet {
             .collect::<Result<Vec<ProofInfo>, _>>()?;
         added_proofs.extend(keep_proofs);
         // Remove spent proofs used as inputs
-        let deleted_ys = input_proofs.clone()
+        let deleted_ys = input_proofs
+            .clone()
             .into_iter()
             .map(|proof| proof.y())
             .collect::<Result<Vec<PublicKey>, _>>()?;
@@ -137,8 +131,7 @@ impl Wallet {
             .update_proofs(added_proofs, deleted_ys)
             .await?;
         // add to db
-        self
-            .localstore
+        self.localstore
             .add_transaction(Transaction {
                 mint_url: mint_url.clone(),
                 direction: TransactionDirection::Split,
@@ -463,98 +456,97 @@ impl Wallet {
         })
     }
 
-     /// Create Swap Payload denomination
-     #[instrument(skip(self, proofs))]
-     pub async fn create_swap_denomination(
-         &self,
-         denomination: Amount,
-         amount: Option<Amount>,
-         proofs: Proofs,
-         include_fees: bool,
-     ) -> Result<PreSwap, Error> {
-         tracing::info!("Creating swap");
-         let active_keyset_id = self.get_active_mint_keyset().await?.id;
+    /// Create Swap Payload denomination
+    #[instrument(skip(self, proofs))]
+    pub async fn create_swap_denomination(
+        &self,
+        denomination: Amount,
+        amount: Option<Amount>,
+        proofs: Proofs,
+        include_fees: bool,
+    ) -> Result<PreSwap, Error> {
+        tracing::info!("Creating swap");
+        let active_keyset_id = self.get_active_mint_keyset().await?.id;
 
-           // Desired amount is either amount passed or value of all proof
-         let proofs_total = proofs.total_amount()?;
+        // Desired amount is either amount passed or value of all proof
+        let proofs_total = proofs.total_amount()?;
 
-         let ys: Vec<PublicKey> = proofs.ys()?;
-         self.localstore
-             .update_proofs_state(ys, State::Reserved)
-             .await?;
+        let ys: Vec<PublicKey> = proofs.ys()?;
+        self.localstore
+            .update_proofs_state(ys, State::Reserved)
+            .await?;
 
-         let fee = self.get_proofs_fee(&proofs).await?;
+        let fee = self.get_proofs_fee(&proofs).await?;
 
-         let change_amount: Amount = proofs_total - amount.unwrap_or(Amount::ZERO) - fee;
+        let change_amount: Amount = proofs_total - amount.unwrap_or(Amount::ZERO) - fee;
 
-         let change_split_target = self.determine_split_target_values(change_amount).await?;
+        let change_split_target = self.determine_split_target_values(change_amount).await?;
 
-         let (send_amount, change_amount) = match include_fees {
-             true => {
-                 let split_count = amount
-                     .unwrap_or(Amount::ZERO)
-                     .split_targeted(&SplitTarget::default())
-                     .unwrap()
-                     .len();
+        let (send_amount, change_amount) = match include_fees {
+            true => {
+                let split_count = amount
+                    .unwrap_or(Amount::ZERO)
+                    .split_targeted(&SplitTarget::default())
+                    .unwrap()
+                    .len();
 
-                 let fee_to_redeem = self
-                     .get_keyset_count_fee(&active_keyset_id, split_count as u64)
-                     .await?;
+                let fee_to_redeem = self
+                    .get_keyset_count_fee(&active_keyset_id, split_count as u64)
+                    .await?;
 
-                 (
-                     amount.map(|a| a + fee_to_redeem),
-                     change_amount - fee_to_redeem,
-                 )
-             }
-             false => (amount, change_amount),
-         };
+                (
+                    amount.map(|a| a + fee_to_redeem),
+                    change_amount - fee_to_redeem,
+                )
+            }
+            false => (amount, change_amount),
+        };
 
-         let derived_secret_count;
+        let derived_secret_count;
 
-         let count = self
-             .localstore
-             .get_keyset_counter(&active_keyset_id)
-             .await?;
+        let count = self
+            .localstore
+            .get_keyset_counter(&active_keyset_id)
+            .await?;
 
-         let mut count = count.map_or(0, |c| c + 1);
+        let mut count = count.map_or(0, |c| c + 1);
 
-         let (mut desired_messages, change_messages) = {
-                 let premint_secrets = PreMintSecrets::from_xpriv_denomination(
-                     active_keyset_id,
-                     count,
-                     self.xpriv,
-                     send_amount.unwrap_or(Amount::ZERO),
-                     denomination,
-                 )?;
+        let (mut desired_messages, change_messages) = {
+            let premint_secrets = PreMintSecrets::from_xpriv_denomination(
+                active_keyset_id,
+                count,
+                self.xpriv,
+                send_amount.unwrap_or(Amount::ZERO),
+                denomination,
+            )?;
 
-                 count += premint_secrets.len() as u32;
+            count += premint_secrets.len() as u32;
 
-                 let change_premint_secrets = PreMintSecrets::from_xpriv(
-                     active_keyset_id,
-                     count,
-                     self.xpriv,
-                     change_amount,
-                     &change_split_target,
-                 )?;
+            let change_premint_secrets = PreMintSecrets::from_xpriv(
+                active_keyset_id,
+                count,
+                self.xpriv,
+                change_amount,
+                &change_split_target,
+            )?;
 
-                 derived_secret_count = change_premint_secrets.len() + premint_secrets.len();
+            derived_secret_count = change_premint_secrets.len() + premint_secrets.len();
 
-                 (premint_secrets, change_premint_secrets)
-         };
+            (premint_secrets, change_premint_secrets)
+        };
 
-         // Combine the BlindedMessages totaling the desired amount with change
-         desired_messages.combine(change_messages);
-         // Sort the premint secrets to avoid finger printing
-         desired_messages.sort_secrets();
+        // Combine the BlindedMessages totaling the desired amount with change
+        desired_messages.combine(change_messages);
+        // Sort the premint secrets to avoid finger printing
+        desired_messages.sort_secrets();
 
-         let swap_request = SwapRequest::new(proofs, desired_messages.blinded_messages());
+        let swap_request = SwapRequest::new(proofs, desired_messages.blinded_messages());
 
-         Ok(PreSwap {
-             pre_mint_secrets: desired_messages,
-             swap_request,
-             derived_secret_count: derived_secret_count as u32,
-             fee,
-         })
-     }
-
+        Ok(PreSwap {
+            pre_mint_secrets: desired_messages,
+            swap_request,
+            derived_secret_count: derived_secret_count as u32,
+            fee,
+        })
+    }
 }

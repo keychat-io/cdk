@@ -905,7 +905,10 @@ ON CONFLICT(id) DO UPDATE SET
                 transactions where kind IN (:kinds) order by timestamp desc limit :l offset :o
             "#,
         )
-        .bind_vec(":kinds", kinds.iter().map(|k| k.to_string()).collect::<Vec<_>>())
+        .bind_vec(
+            ":kinds",
+            kinds.iter().map(|k| k.to_string()).collect::<Vec<_>>(),
+        )
         .bind(":l", limit as i64)
         .bind(":o", offset as i64)
         .fetch_all(&self.pool.get().map_err(Error::Pool)?)

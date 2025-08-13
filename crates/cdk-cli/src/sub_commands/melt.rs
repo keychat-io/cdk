@@ -139,7 +139,7 @@ pub async fn pay(
                 Ok(melt) => {
                     println!(
                         "Melt for {} paid {} with fee of {} ",
-                        wallet.mint_url, melt.amount, melt.fee_paid
+                        wallet.mint_url, melt.0.amount, melt.0.fee_paid
                     );
                 }
                 Err(err) => {
@@ -209,9 +209,9 @@ pub async fn pay(
         println!("{quote:?}");
 
         let melt = wallet.melt(&quote.id).await?;
-        println!("Paid invoice: {}", melt.state);
+        println!("Paid invoice: {}", melt.0.state);
 
-        if let Some(preimage) = melt.preimage {
+        if let Some(preimage) = melt.0.preimage {
             println!("Payment preimage: {preimage}");
         }
     }

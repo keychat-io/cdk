@@ -25,7 +25,7 @@ impl Wallet {
         proofs: Proofs,
         opts: ReceiveOptions,
         memo: Option<String>,
-    ) -> Result<Amount, Error> {
+    ) -> Result<(Amount, Transaction), Error> {
         let mint_url = &self.mint_url;
         // Add mint if it does not exist in the store
         if self
@@ -165,23 +165,22 @@ impl Wallet {
             )
             .await?;
 
+        let tx = Transaction {
+            mint_url: self.mint_url.clone(),
+            direction: TransactionDirection::Incoming,
+            kind: TransactionKind::Cashu,
+            amount: total_amount,
+            fee: proofs_amount - total_amount,
+            unit: self.unit.clone(),
+            ys: proofs_ys,
+            timestamp: unix_time(),
+            memo,
+            metadata: opts.metadata,
+        };
         // Add transaction to store
-        self.localstore
-            .add_transaction(Transaction {
-                mint_url: self.mint_url.clone(),
-                direction: TransactionDirection::Incoming,
-                kind: TransactionKind::Cashu,
-                amount: total_amount,
-                fee: proofs_amount - total_amount,
-                unit: self.unit.clone(),
-                ys: proofs_ys,
-                timestamp: unix_time(),
-                memo,
-                metadata: opts.metadata,
-            })
-            .await?;
+        self.localstore.add_transaction(tx.clone()).await?;
 
-        Ok(total_amount)
+        Ok((total_amount, tx))
     }
 
     /// Receive
@@ -213,7 +212,7 @@ impl Wallet {
         &self,
         encoded_token: &str,
         opts: ReceiveOptions,
-    ) -> Result<Amount, Error> {
+    ) -> Result<(Amount, Transaction), Error> {
         let token = Token::from_str(encoded_token)?;
 
         let unit = token.unit().unwrap_or_default();
@@ -266,7 +265,7 @@ impl Wallet {
         &self,
         binary_token: &Vec<u8>,
         opts: ReceiveOptions,
-    ) -> Result<Amount, Error> {
+    ) -> Result<(Amount, Transaction), Error> {
         let token_str = Token::try_from(binary_token)?.to_string();
         self.receive(token_str.as_str(), opts).await
     }

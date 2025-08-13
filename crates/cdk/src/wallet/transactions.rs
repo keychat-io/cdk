@@ -51,7 +51,7 @@ impl Wallet {
     pub async fn list_pending_transactions(&self) -> Result<Vec<Transaction>, Error> {
         let all_txs = self.list_transactions(None).await?;
         let all_pending_proofs = self.get_all_pending_proofs().await?;
-        // let pending_spent_proofs = 
+        // let pending_spent_proofs =
         //     all_pending_proofs
         //     .into_iter()
         //     .filter(|p| match p.y() {
@@ -60,24 +60,23 @@ impl Wallet {
         //     })
         //     .collect::<Vec<_>>();
         // find all pending_txs
-        let pending_txs= all_txs
-        .into_iter()
-        .filter(|tx| {
-            all_pending_proofs.iter().any(|p| {
-                match p.y() {
+        let pending_txs = all_txs
+            .into_iter()
+            .filter(|tx| {
+                all_pending_proofs.iter().any(|p| match p.y() {
                     Ok(y) => tx.ys.contains(&y),
                     Err(_) => false,
-                }
+                })
             })
-        })
-        .collect::<Vec<_>>();
+            .collect::<Vec<_>>();
         Ok(pending_txs)
     }
 
-
     /// Get transaction by ID
-    pub async fn remove_transactions(&self, unix_timestamp_le: u64,) -> Result<(), Error> {
-        self.localstore.remove_transactions(unix_timestamp_le).await?;
+    pub async fn remove_transactions(&self, unix_timestamp_le: u64) -> Result<(), Error> {
+        self.localstore
+            .remove_transactions(unix_timestamp_le)
+            .await?;
         Ok(())
     }
 

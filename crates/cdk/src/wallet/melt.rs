@@ -117,7 +117,11 @@ impl Wallet {
 
     /// Melt specific proofs
     #[instrument(skip(self, proofs))]
-    pub async fn melt_proofs(&self, quote_id: &str, proofs: Proofs) -> Result<Melted, Error> {
+    pub async fn melt_proofs(
+        &self,
+        quote_id: &str,
+        proofs: Proofs,
+    ) -> Result<(Melted, Transaction), Error> {
         let quote_info = self
             .localstore
             .get_melt_quote(quote_id)
@@ -248,23 +252,22 @@ impl Wallet {
             .update_proofs(change_proof_infos, deleted_ys)
             .await?;
 
+        let tx = Transaction {
+            mint_url: self.mint_url.clone(),
+            direction: TransactionDirection::Outgoing,
+            kind: TransactionKind::LN,
+            amount: melted.amount,
+            fee: melted.fee_paid,
+            unit: self.unit.clone(),
+            ys: proofs.ys()?,
+            timestamp: unix_time(),
+            memo: None,
+            metadata: HashMap::new(),
+        };
         // Add transaction to store
-        self.localstore
-            .add_transaction(Transaction {
-                mint_url: self.mint_url.clone(),
-                direction: TransactionDirection::Outgoing,
-                kind: TransactionKind::LN,
-                amount: melted.amount,
-                fee: melted.fee_paid,
-                unit: self.unit.clone(),
-                ys: proofs.ys()?,
-                timestamp: unix_time(),
-                memo: None,
-                metadata: HashMap::new(),
-            })
-            .await?;
+        self.localstore.add_transaction(tx.clone()).await?;
 
-        Ok(melted)
+        Ok((melted, tx))
     }
 
     /// Melt
@@ -294,7 +297,7 @@ impl Wallet {
     ///  Ok(())
     /// }
     #[instrument(skip(self))]
-    pub async fn melt(&self, quote_id: &str) -> Result<Melted, Error> {
+    pub async fn melt(&self, quote_id: &str) -> Result<(Melted, Transaction), Error> {
         let quote_info = self
             .localstore
             .get_melt_quote(quote_id)

@@ -229,7 +229,9 @@ impl MultiMintWallet {
         let mut transactions = Vec::new();
 
         for (_, wallet) in self.wallets.read().await.iter() {
-            let wallet_transactions = wallet.list_transactions_with_kind_offset(offset, limit, kind, direction).await?;
+            let wallet_transactions = wallet
+                .list_transactions_with_kind_offset(offset, limit, kind, direction)
+                .await?;
             transactions.extend(wallet_transactions);
         }
 
@@ -264,11 +266,7 @@ impl MultiMintWallet {
 
     /// remove transactions by timestamp
     #[instrument(skip(self))]
-    pub async fn remove_transactions(
-        &self,
-        unix_timestamp_le: u64,
-    ) -> Result<(), Error> {
-
+    pub async fn remove_transactions(&self, unix_timestamp_le: u64) -> Result<(), Error> {
         for (_, wallet) in self.wallets.read().await.iter() {
             wallet.remove_transactions(unix_timestamp_le).await?;
         }
@@ -316,7 +314,7 @@ impl MultiMintWallet {
         wallet_key: &WalletKey,
         send: PreparedSend,
         memo: Option<SendMemo>,
-    ) -> Result<Token, Error> {
+    ) -> Result<(Token, Transaction), Error> {
         let wallets = self.wallets.read().await;
         let wallet = wallets
             .get(wallet_key)
@@ -381,7 +379,7 @@ impl MultiMintWallet {
         wallet_key: &WalletKey,
         quote_id: &str,
         conditions: Option<SpendingConditions>,
-    ) -> Result<Proofs, Error> {
+    ) -> Result<(Proofs, Transaction), Error> {
         let wallets = self.wallets.read().await;
         let wallet = wallets
             .get(wallet_key)
@@ -399,7 +397,7 @@ impl MultiMintWallet {
         &self,
         encoded_token: &str,
         opts: ReceiveOptions,
-    ) -> Result<Amount, Error> {
+    ) -> Result<(Amount, Transaction), Error> {
         let token_data = Token::from_str(encoded_token)?;
         let unit = token_data.unit().unwrap_or_default();
 
@@ -428,28 +426,29 @@ impl MultiMintWallet {
             None => wallet.get_mint_keysets().await?,
         };
         let proofs = token_data.proofs(&keysets_info)?;
-
-        let mut amount_received = Amount::ZERO;
-
-        let mut mint_errors = None;
-
-        match wallet
+        wallet
             .receive_proofs(proofs, opts, token_data.memo().clone())
             .await
-        {
-            Ok(amount) => {
-                amount_received += amount;
-            }
-            Err(err) => {
-                tracing::error!("Could no receive proofs for mint: {}", err);
-                mint_errors = Some(err);
-            }
-        }
+        // let mut amount_received = Amount::ZERO;
 
-        match mint_errors {
-            None => Ok(amount_received),
-            Some(err) => Err(err),
-        }
+        // let mut mint_errors = None;
+        // match wallet
+        //     .receive_proofs(proofs, opts, token_data.memo().clone())
+        //     .await
+        // {
+        //     Ok(amount) => {
+        //         amount_received += amount.0;
+        //     }
+        //     Err(err) => {
+        //         tracing::error!("Could no receive proofs for mint: {}", err);
+        //         mint_errors = Some(err);
+        //     }
+        // }
+
+        // match mint_errors {
+        //     None => Ok(amount_received),
+        //     Some(err) => Err(err),
+        // }
     }
 
     /// Pay an bolt11 invoice from specific wallet
@@ -460,7 +459,7 @@ impl MultiMintWallet {
         options: Option<MeltOptions>,
         wallet_key: &WalletKey,
         max_fee: Option<Amount>,
-    ) -> Result<Melted, Error> {
+    ) -> Result<(Melted, Transaction), Error> {
         let wallets = self.wallets.read().await;
         let wallet = wallets
             .get(wallet_key)

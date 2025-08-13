@@ -70,7 +70,7 @@ pub async fn mint(
 
     let proofs = wallet.mint(&quote_id, SplitTarget::default(), None).await?;
 
-    let receive_amount = proofs.total_amount()?;
+    let receive_amount = proofs.0.total_amount()?;
 
     println!("Received {receive_amount} from mint {mint_url}");
 
