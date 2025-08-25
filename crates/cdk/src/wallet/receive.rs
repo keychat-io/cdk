@@ -15,7 +15,7 @@ use crate::nuts::nut10::Kind;
 use crate::nuts::{Conditions, Proofs, PublicKey, SecretKey, SigFlag, State, Token};
 use crate::types::ProofInfo;
 use crate::util::hex;
-use crate::{ensure_cdk, Amount, Error, Wallet, SECP256K1};
+use crate::{ensure_cdk, Error, Wallet, SECP256K1};
 
 impl Wallet {
     /// Receive proofs
@@ -25,7 +25,7 @@ impl Wallet {
         proofs: Proofs,
         opts: ReceiveOptions,
         memo: Option<String>,
-    ) -> Result<(Amount, Transaction), Error> {
+    ) -> Result<Transaction, Error> {
         let mint_url = &self.mint_url;
         // Add mint if it does not exist in the store
         if self
@@ -155,6 +155,7 @@ impl Wallet {
         let total_amount = recv_proofs.total_amount()?;
 
         let recv_proof_infos = recv_proofs
+            .clone()
             .into_iter()
             .map(|proof| ProofInfo::new(proof, mint_url.clone(), State::Unspent, self.unit.clone()))
             .collect::<Result<Vec<ProofInfo>, _>>()?;
@@ -165,6 +166,13 @@ impl Wallet {
             )
             .await?;
 
+        let token = Token::new(
+            self.mint_url.clone(),
+            recv_proofs,
+            memo.clone(),
+            self.unit.clone(),
+        );
+
         let tx = Transaction {
             mint_url: self.mint_url.clone(),
             direction: TransactionDirection::Incoming,
@@ -173,6 +181,7 @@ impl Wallet {
             fee: proofs_amount - total_amount,
             unit: self.unit.clone(),
             ys: proofs_ys,
+            token: token.to_v3_string(),
             timestamp: unix_time(),
             memo,
             metadata: opts.metadata,
@@ -180,7 +189,7 @@ impl Wallet {
         // Add transaction to store
         self.localstore.add_transaction(tx.clone()).await?;
 
-        Ok((total_amount, tx))
+        Ok(tx)
     }
 
     /// Receive
@@ -212,7 +221,7 @@ impl Wallet {
         &self,
         encoded_token: &str,
         opts: ReceiveOptions,
-    ) -> Result<(Amount, Transaction), Error> {
+    ) -> Result<Transaction, Error> {
         let token = Token::from_str(encoded_token)?;
 
         let unit = token.unit().unwrap_or_default();
@@ -265,7 +274,7 @@ impl Wallet {
         &self,
         binary_token: &Vec<u8>,
         opts: ReceiveOptions,
-    ) -> Result<(Amount, Transaction), Error> {
+    ) -> Result<Transaction, Error> {
         let token_str = Token::try_from(binary_token)?.to_string();
         self.receive(token_str.as_str(), opts).await
     }

@@ -282,10 +282,9 @@ pub async fn create_request(
 
                     let amount = multi_mint_wallet
                         .receive(&token.to_string(), ReceiveOptions::default())
-                        .await?
-                        .0;
+                        .await?;
 
-                    println!("Received {amount}");
+                    println!("Received {}", amount.amount);
                     exit = true;
                 }
                 Ok(exit) // Set to true to exit from the loop

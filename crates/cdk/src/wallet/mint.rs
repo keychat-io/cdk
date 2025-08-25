@@ -10,7 +10,7 @@ use crate::dhke::construct_proofs;
 use crate::nuts::nut00::ProofsMethods;
 use crate::nuts::{
     nut12, MintQuoteBolt11Request, MintQuoteBolt11Response, MintRequest, PreMintSecrets, Proofs,
-    SecretKey, SpendingConditions, State,
+    SecretKey, SpendingConditions, State, Token
 };
 use crate::types::ProofInfo;
 use crate::util::unix_time;
@@ -291,6 +291,13 @@ impl Wallet {
         // Add new proofs to store
         self.localstore.update_proofs(proof_infos, vec![]).await?;
 
+        let token = Token::new(
+            self.mint_url.clone(),
+            proofs.clone(),
+            None,
+            self.unit.clone(),
+        );
+
         let tx = Transaction {
             mint_url: self.mint_url.clone(),
             direction: TransactionDirection::Incoming,
@@ -299,6 +306,7 @@ impl Wallet {
             fee: Amount::ZERO,
             unit: self.unit.clone(),
             ys: proofs.ys()?,
+            token: token.to_v3_string(),
             timestamp: unix_time,
             memo: None,
             metadata: HashMap::new(),

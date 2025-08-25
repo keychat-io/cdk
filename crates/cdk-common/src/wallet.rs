@@ -120,6 +120,7 @@ pub struct Transaction {
     pub mint_url: MintUrl,
     /// Transaction direction
     pub direction: TransactionDirection,
+    /// transaction kind
     pub kind: TransactionKind,
     /// Amount
     pub amount: Amount,
@@ -129,6 +130,8 @@ pub struct Transaction {
     pub unit: CurrencyUnit,
     /// Proof Ys
     pub ys: Vec<PublicKey>,
+    /// cashu token
+    pub token: String,
     /// Unix timestamp
     pub timestamp: u64,
     /// Memo

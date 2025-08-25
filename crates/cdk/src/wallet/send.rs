@@ -207,7 +207,7 @@ impl Wallet {
         &self,
         send: PreparedSend,
         memo: Option<SendMemo>,
-    ) -> Result<(Token, Transaction), Error> {
+    ) -> Result<Transaction, Error> {
         tracing::info!("Sending prepared send");
         let total_send_fee = send.fee();
         let mut proofs_to_send = send.proofs_to_send;
@@ -281,6 +281,13 @@ impl Wallet {
         let send_memo = send.options.memo.or(memo);
         let memo = send_memo.and_then(|m| if m.include_memo { Some(m.memo) } else { None });
 
+        let token = Token::new(
+            self.mint_url.clone(),
+            proofs_to_send.clone(),
+            memo.clone(),
+            self.unit.clone(),
+        );
+
         let tx = Transaction {
             mint_url: self.mint_url.clone(),
             direction: TransactionDirection::Outgoing,
@@ -289,6 +296,7 @@ impl Wallet {
             fee: total_send_fee,
             unit: self.unit.clone(),
             ys: proofs_to_send.ys()?,
+            token: token.to_v3_string(),
             timestamp: unix_time(),
             memo: memo.clone(),
             metadata: send.options.metadata,
@@ -297,15 +305,7 @@ impl Wallet {
         self.localstore.add_transaction(tx.clone()).await?;
 
         // Create and return token
-        Ok((
-            Token::new(
-                self.mint_url.clone(),
-                proofs_to_send,
-                memo,
-                self.unit.clone(),
-            ),
-            tx,
-        ))
+        Ok(tx)
     }
 
     /// Cancel prepared send

@@ -159,7 +159,7 @@ async fn receive_token(
             },
         )
         .await?;
-    Ok(amount.0)
+    Ok(amount.amount)
 }
 
 /// Receive tokens sent to nostr pubkey via dm

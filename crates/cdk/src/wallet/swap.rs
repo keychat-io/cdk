@@ -5,6 +5,7 @@ use crate::dhke::construct_proofs;
 use crate::nuts::nut00::ProofsMethods;
 use crate::nuts::{
     nut10, PreMintSecrets, PreSwap, Proofs, PublicKey, SpendingConditions, State, SwapRequest,
+    Token,
 };
 use crate::types::ProofInfo;
 use crate::{ensure_cdk, Amount, Error, Wallet};
@@ -130,6 +131,9 @@ impl Wallet {
         self.localstore
             .update_proofs(added_proofs, deleted_ys)
             .await?;
+
+        let token = Token::new(mint_url.clone(), input_proofs.clone(), None, unit.clone());
+
         // add to db
         self.localstore
             .add_transaction(Transaction {
@@ -137,9 +141,10 @@ impl Wallet {
                 direction: TransactionDirection::Split,
                 kind: TransactionKind::Cashu,
                 amount: amount.unwrap_or(Amount::ZERO),
-                fee: fee,
+                fee,
                 unit: unit.clone(),
                 ys: input_proofs.ys()?,
+                token: token.to_v3_string(),
                 timestamp: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()

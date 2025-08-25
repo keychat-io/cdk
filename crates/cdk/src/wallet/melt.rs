@@ -11,7 +11,7 @@ use crate::amount::to_unit;
 use crate::dhke::construct_proofs;
 use crate::nuts::{
     CurrencyUnit, MeltOptions, MeltQuoteBolt11Request, MeltQuoteBolt11Response, MeltRequest,
-    PreMintSecrets, Proofs, ProofsMethods, State,
+    PreMintSecrets, Proofs, ProofsMethods, State, Token,
 };
 use crate::types::{Melted, ProofInfo};
 use crate::util::unix_time;
@@ -252,6 +252,13 @@ impl Wallet {
             .update_proofs(change_proof_infos, deleted_ys)
             .await?;
 
+        let token = Token::new(
+            self.mint_url.clone(),
+            proofs.clone(),
+            None,
+            self.unit.clone(),
+        );
+
         let tx = Transaction {
             mint_url: self.mint_url.clone(),
             direction: TransactionDirection::Outgoing,
@@ -260,6 +267,7 @@ impl Wallet {
             fee: melted.fee_paid,
             unit: self.unit.clone(),
             ys: proofs.ys()?,
+            token: token.to_v3_string(),
             timestamp: unix_time(),
             memo: None,
             metadata: HashMap::new(),

@@ -1134,6 +1134,7 @@ fn sqlite_row_to_transaction(row: Vec<Column>) -> Result<Transaction, Error> {
             amount,
             fee,
             ys,
+            token,
             timestamp,
             memo,
             metadata
@@ -1154,6 +1155,7 @@ fn sqlite_row_to_transaction(row: Vec<Column>) -> Result<Transaction, Error> {
             .chunks(33)
             .map(PublicKey::from_slice)
             .collect::<Result<Vec<_>, _>>()?,
+        token: column_as_string!(token),
         timestamp: column_as_number!(timestamp),
         memo: column_as_nullable_string!(memo),
         metadata: column_as_nullable_string!(metadata, |v| serde_json::from_str(&v).ok(), |v| {

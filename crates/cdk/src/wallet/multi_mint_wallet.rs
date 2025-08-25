@@ -314,7 +314,7 @@ impl MultiMintWallet {
         wallet_key: &WalletKey,
         send: PreparedSend,
         memo: Option<SendMemo>,
-    ) -> Result<(Token, Transaction), Error> {
+    ) -> Result<Transaction, Error> {
         let wallets = self.wallets.read().await;
         let wallet = wallets
             .get(wallet_key)
@@ -397,7 +397,7 @@ impl MultiMintWallet {
         &self,
         encoded_token: &str,
         opts: ReceiveOptions,
-    ) -> Result<(Amount, Transaction), Error> {
+    ) -> Result<Transaction, Error> {
         let token_data = Token::from_str(encoded_token)?;
         let unit = token_data.unit().unwrap_or_default();
 
