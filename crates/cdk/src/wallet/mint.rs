@@ -10,7 +10,7 @@ use crate::dhke::construct_proofs;
 use crate::nuts::nut00::ProofsMethods;
 use crate::nuts::{
     nut12, MintQuoteBolt11Request, MintQuoteBolt11Response, MintRequest, PreMintSecrets, Proofs,
-    SecretKey, SpendingConditions, State, Token
+    SecretKey, SpendingConditions, State, Token,
 };
 use crate::types::ProofInfo;
 use crate::util::unix_time;

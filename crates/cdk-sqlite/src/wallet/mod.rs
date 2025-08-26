@@ -767,13 +767,14 @@ ON CONFLICT(id) DO UPDATE SET
             .iter()
             .flat_map(|y| y.to_bytes().to_vec())
             .collect::<Vec<_>>();
+        let token = transaction.token.to_string();
 
         Statement::new(
             r#"
 INSERT INTO transactions
-(id, mint_url, direction, kind, unit, amount, fee, ys, timestamp, memo, metadata)
+(id, mint_url, direction, kind, unit, amount, fee, ys, token, timestamp, memo, metadata)
 VALUES
-(:id, :mint_url, :direction, :kind, :unit, :amount, :fee, :ys, :timestamp, :memo, :metadata)
+(:id, :mint_url, :direction, :kind, :unit, :amount, :fee, :ys, :token, :timestamp, :memo, :metadata)
 ON CONFLICT(id) DO UPDATE SET
     mint_url = excluded.mint_url,
     direction = excluded.direction,
@@ -782,6 +783,7 @@ ON CONFLICT(id) DO UPDATE SET
     amount = excluded.amount,
     fee = excluded.fee,
     ys = excluded.ys,
+    token = excluded.token,
     timestamp = excluded.timestamp,
     memo = excluded.memo,
     metadata = excluded.metadata
@@ -796,6 +798,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(":amount", amount)
         .bind(":fee", fee)
         .bind(":ys", ys)
+        .bind(":token", token)
         .bind(":timestamp", transaction.timestamp as i64)
         .bind(":memo", transaction.memo)
         .bind(
@@ -823,6 +826,7 @@ ON CONFLICT(id) DO UPDATE SET
                 amount,
                 fee,
                 ys,
+                token,
                 timestamp,
                 memo,
                 metadata
@@ -856,6 +860,7 @@ ON CONFLICT(id) DO UPDATE SET
                 amount,
                 fee,
                 ys,
+                token,
                 timestamp,
                 memo,
                 metadata
@@ -898,6 +903,7 @@ ON CONFLICT(id) DO UPDATE SET
                 amount,
                 fee,
                 ys,
+                token,
                 timestamp,
                 memo,
                 metadata
