@@ -307,6 +307,7 @@ impl Wallet {
             unit: self.unit.clone(),
             ys: proofs.ys()?,
             token: token.to_v3_string(),
+            status: cdk_common::wallet::TransactionStatus::Success,
             timestamp: unix_time,
             memo: None,
             metadata: HashMap::new(),

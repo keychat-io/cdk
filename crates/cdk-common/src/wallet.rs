@@ -132,6 +132,8 @@ pub struct Transaction {
     pub ys: Vec<PublicKey>,
     /// cashu token
     pub token: String,
+    /// transaction status
+    pub status: TransactionStatus,
     /// Unix timestamp
     pub timestamp: u64,
     /// Memo
@@ -187,16 +189,46 @@ impl Ord for Transaction {
 /// Transaction Status
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TransactionStatus {
+    /// pending
     Pending,
+    /// success
     Success,
+    /// failed
     Failed,
+    ///expired
     Expired,
 }
 
+impl std::fmt::Display for TransactionStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TransactionStatus::Pending => write!(f, "Pending"),
+            TransactionStatus::Success => write!(f, "Success"),
+            TransactionStatus::Failed => write!(f, "Failed"),
+            TransactionStatus::Expired => write!(f, "Expired"),
+        }
+    }
+}
+
+impl FromStr for TransactionStatus {
+    type Err = Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "Pending" => Ok(Self::Pending),
+            "Success" => Ok(Self::Success),
+            "Failed" => Ok(Self::Failed),
+            "Expired" => Ok(Self::Expired),
+            _ => Err(Error::InvalidTransactionStatus),
+        }
+    }
+}
 /// Transaction Kind
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TransactionKind {
+    /// cashu
     Cashu,
+    /// ln
     LN,
 }
 
@@ -227,7 +259,7 @@ pub enum TransactionDirection {
     Incoming,
     /// Outgoing transaction (i.e., send or melt)
     Outgoing,
-    // split unit 1
+    /// split unit 1
     Split,
 }
 

@@ -145,6 +145,7 @@ impl Wallet {
                 unit: unit.clone(),
                 ys: input_proofs.ys()?,
                 token: token.to_v3_string(),
+                status: cdk_common::wallet::TransactionStatus::Success,
                 timestamp: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()

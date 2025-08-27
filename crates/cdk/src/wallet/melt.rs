@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use cdk_common::amount::SplitTarget;
-use cdk_common::wallet::{Transaction, TransactionDirection, TransactionKind};
+use cdk_common::nut05;
+use cdk_common::wallet::{Transaction, TransactionDirection, TransactionKind, TransactionStatus};
 use lightning_invoice::Bolt11Invoice;
 use tracing::instrument;
 
@@ -268,6 +269,11 @@ impl Wallet {
             unit: self.unit.clone(),
             ys: proofs.ys()?,
             token: token.to_v3_string(),
+            status: if melted.state == nut05::QuoteState::Paid {
+                TransactionStatus::Success
+            } else {
+                TransactionStatus::Failed
+            },
             timestamp: unix_time(),
             memo: None,
             metadata: HashMap::new(),

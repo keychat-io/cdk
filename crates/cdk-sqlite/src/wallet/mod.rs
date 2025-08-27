@@ -14,6 +14,7 @@ use cdk_common::nuts::{MeltQuoteState, MintQuoteState};
 use cdk_common::secret::Secret;
 use cdk_common::wallet::{
     self, MintQuote, Transaction, TransactionDirection, TransactionId, TransactionKind,
+    TransactionStatus,
 };
 use cdk_common::{
     database, Amount, CurrencyUnit, Id, KeySet, KeySetInfo, Keys, MintInfo, Proof, ProofDleq,
@@ -768,13 +769,14 @@ ON CONFLICT(id) DO UPDATE SET
             .flat_map(|y| y.to_bytes().to_vec())
             .collect::<Vec<_>>();
         let token = transaction.token.to_string();
+        let status = transaction.status.to_string();
 
         Statement::new(
             r#"
 INSERT INTO transactions
-(id, mint_url, direction, kind, unit, amount, fee, ys, token, timestamp, memo, metadata)
+(id, mint_url, direction, kind, unit, amount, fee, ys, token, status, timestamp, memo, metadata)
 VALUES
-(:id, :mint_url, :direction, :kind, :unit, :amount, :fee, :ys, :token, :timestamp, :memo, :metadata)
+(:id, :mint_url, :direction, :kind, :unit, :amount, :fee, :ys, :token, :status, :timestamp, :memo, :metadata)
 ON CONFLICT(id) DO UPDATE SET
     mint_url = excluded.mint_url,
     direction = excluded.direction,
@@ -784,6 +786,7 @@ ON CONFLICT(id) DO UPDATE SET
     fee = excluded.fee,
     ys = excluded.ys,
     token = excluded.token,
+    status = excluded.status,
     timestamp = excluded.timestamp,
     memo = excluded.memo,
     metadata = excluded.metadata
@@ -799,6 +802,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(":fee", fee)
         .bind(":ys", ys)
         .bind(":token", token)
+        .bind(":status", status)
         .bind(":timestamp", transaction.timestamp as i64)
         .bind(":memo", transaction.memo)
         .bind(
@@ -827,6 +831,7 @@ ON CONFLICT(id) DO UPDATE SET
                 fee,
                 ys,
                 token,
+                status,
                 timestamp,
                 memo,
                 metadata
@@ -861,6 +866,7 @@ ON CONFLICT(id) DO UPDATE SET
                 fee,
                 ys,
                 token,
+                status,
                 timestamp,
                 memo,
                 metadata
@@ -904,6 +910,7 @@ ON CONFLICT(id) DO UPDATE SET
                 fee,
                 ys,
                 token,
+                status,
                 timestamp,
                 memo,
                 metadata
@@ -1141,6 +1148,7 @@ fn sqlite_row_to_transaction(row: Vec<Column>) -> Result<Transaction, Error> {
             fee,
             ys,
             token,
+            status,
             timestamp,
             memo,
             metadata
@@ -1162,6 +1170,7 @@ fn sqlite_row_to_transaction(row: Vec<Column>) -> Result<Transaction, Error> {
             .map(PublicKey::from_slice)
             .collect::<Result<Vec<_>, _>>()?,
         token: column_as_string!(token),
+        status: column_as_string!(status, TransactionStatus::from_str),
         timestamp: column_as_number!(timestamp),
         memo: column_as_nullable_string!(memo),
         metadata: column_as_nullable_string!(metadata, |v| serde_json::from_str(&v).ok(), |v| {

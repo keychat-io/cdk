@@ -19,4 +19,5 @@ pub static MIGRATIONS: &[(&str, &str)] = &[
     ("20250616144830_add_keyset_expiry.sql", include_str!(r#"./migrations/20250616144830_add_keyset_expiry.sql"#)),
     ("20250716033951_add_kind_to_transactions.sql", include_str!(r#"./migrations/20250716033951_add_kind_to_transactions.sql"#)),
     ("20250825081019_add_token_to_transactions.sql", include_str!(r#"./migrations/20250825081019_add_token_to_transactions.sql"#)),
+    ("20250827114410_add_status_to_transactions.sql", include_str!(r#"./migrations/20250827114410_add_status_to_transactions.sql"#)),
 ];
