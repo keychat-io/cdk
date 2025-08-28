@@ -82,10 +82,10 @@ impl Wallet {
         let quote_res = self.client.post_mint_quote(request).await?;
 
         let quote = MintQuote {
-            mint_url,
+            mint_url: mint_url.clone(),
             id: quote_res.quote,
             amount,
-            unit,
+            unit: unit.clone(),
             request: quote_res.request,
             state: quote_res.state,
             expiry: quote_res.expiry.unwrap_or(0),
@@ -93,6 +93,23 @@ impl Wallet {
         };
 
         self.localstore.add_mint_quote(quote.clone()).await?;
+
+        // let tx = Transaction {
+        //     mint_url: mint_url,
+        //     direction: TransactionDirection::Incoming,
+        //     kind: TransactionKind::LN,
+        //     amount: amount,
+        //     fee: Amount::ZERO,
+        //     unit: unit,
+        //     ys: vec![quote_res.pubkey.unwrap()],
+        //     token: "".to_string(),
+        //     status: cdk_common::wallet::TransactionStatus::Pending,
+        //     timestamp: unix_time(),
+        //     memo: None,
+        //     metadata: HashMap::new(),
+        // };
+        // // Add transaction to store
+        // self.localstore.add_transaction(tx.clone()).await?;
 
         Ok(quote)
     }

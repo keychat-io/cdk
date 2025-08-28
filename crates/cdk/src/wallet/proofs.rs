@@ -1,6 +1,6 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
-use cdk_common::wallet::TransactionId;
+use cdk_common::wallet::{Transaction, TransactionId, TransactionKind, TransactionStatus};
 use cdk_common::Id;
 use tracing::instrument;
 
@@ -149,9 +149,97 @@ impl Wallet {
             })
             .collect();
 
+        // this is will delete spent proofs in db
         self.localstore.update_proofs(vec![], spent_ys).await?;
 
         Ok(spendable.states)
+    }
+
+    /// check
+    #[instrument(skip(self))]
+    pub async fn check_proofs_tx_spent_state(&self) -> Result<(u64, u64), Error> {
+        let proofs = self
+            .localstore
+            .get_proofs(
+                Some(self.mint_url.clone()),
+                Some(self.unit.clone()),
+                Some(vec![State::Pending, State::Reserved, State::PendingSpent]),
+                None,
+            )
+            .await?;
+        let pendings_count = proofs.len() as u64;
+        let mut update_count = 0;
+        let ps: Vec<Proof> = proofs.clone().into_iter().map(|p| p.proof).collect();
+        let spendable = self
+            .client
+            .post_check_state(CheckStateRequest { ys: ps.ys()? })
+            .await?;
+
+        let states = spendable.states;
+        let spent_states: HashSet<PublicKey> = states
+            .clone()
+            .into_iter()
+            .filter(|s| s.state.eq(&State::Spent))
+            .map(|s| s.y)
+            .collect();
+
+        let (spent_proofs, _non_spent_proofs): (Vec<ProofInfo>, Vec<ProofInfo>) = proofs
+            .into_iter()
+            .partition(|p| spent_states.contains(&p.y));
+        // let spend_ys: Vec<PublicKey> = spent_proofs.into_iter().map(|p| p.y).collect();
+
+        let pending_txs = self.list_pending_transactions().await?;
+        let mut cushs: BTreeMap<String, Vec<Transaction>> = BTreeMap::new();
+        let mut lns: BTreeMap<String, Vec<Transaction>> = BTreeMap::new();
+        for tx in pending_txs {
+            if tx.kind == TransactionKind::Cashu {
+                let txs = cushs.entry(tx.mint_url.to_string()).or_default();
+
+                txs.push(tx)
+            } else if tx.kind == TransactionKind::LN {
+                let txs = lns.entry(tx.mint_url.to_string()).or_default();
+
+                txs.push(tx)
+            } else {
+                unreachable!()
+            }
+        }
+        for txs in cushs.values_mut() {
+            for tx in txs.iter_mut() {
+                let is_spent = spent_proofs.iter().any(|p| match p.proof.y() {
+                    Ok(y) => tx.ys.contains(&y),
+                    Err(_) => false,
+                });
+                if is_spent {
+                    update_count += 1;
+                    tx.status = TransactionStatus::Success;
+                    self.localstore.add_transaction(tx.clone()).await?;
+                }
+            }
+        }
+        // after update tx , then can del proof which spent
+        let spent_ys: Vec<_> = states
+            .iter()
+            .filter_map(|p| match p.state {
+                State::Spent => Some(p.y),
+                _ => None,
+            })
+            .collect();
+
+        // this is will delete spent proofs in db
+        self.localstore.update_proofs(vec![], spent_ys).await?;
+
+        // for (_m, txs) in lns.iter_mut() {
+
+        //     for tx in txs {
+        //         let res = self.mint(&tx.id().to_string(), SplitTarget::default(), None).await;
+        //         if res.is_ok() {
+        //             update_count += 1;
+        //         }
+        //     }
+        // }
+
+        Ok((update_count, pendings_count))
     }
 
     /// Checks pending proofs for spent status
@@ -173,9 +261,23 @@ impl Wallet {
             return Ok(Amount::ZERO);
         }
 
-        let states = self
-            .check_proofs_spent(proofs.clone().into_iter().map(|p| p.proof).collect())
+        let spendable = self
+            .client
+            .post_check_state(CheckStateRequest {
+                ys: proofs
+                    .clone()
+                    .into_iter()
+                    .map(|p| p.proof)
+                    .collect::<Vec<_>>()
+                    .ys()?,
+            })
             .await?;
+
+        let states = spendable.states;
+
+        // let states = self
+        //     .check_proofs_spent(proofs.clone().into_iter().map(|p| p.proof).collect())
+        //     .await?;
 
         // Both `State::Pending` and `State::Unspent` should be included in the pending
         // table. This is because a proof that has been created to send will be

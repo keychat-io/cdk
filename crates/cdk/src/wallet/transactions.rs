@@ -1,4 +1,6 @@
-use cdk_common::wallet::{Transaction, TransactionDirection, TransactionId, TransactionKind};
+use cdk_common::wallet::{
+    Transaction, TransactionDirection, TransactionId, TransactionKind, TransactionStatus,
+};
 
 use crate::{Error, Wallet};
 
@@ -50,25 +52,22 @@ impl Wallet {
     /// list pending transactions with kind
     pub async fn list_pending_transactions(&self) -> Result<Vec<Transaction>, Error> {
         let all_txs = self.list_transactions(None).await?;
-        let all_pending_proofs = self.get_all_pending_proofs().await?;
-        // let pending_spent_proofs =
-        //     all_pending_proofs
+        // let all_pending_proofs = self.get_all_pending_proofs().await?;
+        // println!("all_pending_proofs {:?}", all_pending_proofs);
+        // find all pending_txs
+        // let pending_txs = all_txs
         //     .into_iter()
-        //     .filter(|p| match p.y() {
-        //         Ok(y) => tx.ys.contains(&y),
-        //         Err(_) => false,
+        //     .filter(|tx| {
+        //         all_pending_proofs.iter().any(|p| match p.y() {
+        //             Ok(y) => tx.ys.contains(&y),
+        //             Err(_) => false,
+        //         })
         //     })
         //     .collect::<Vec<_>>();
-        // find all pending_txs
         let pending_txs = all_txs
             .into_iter()
-            .filter(|tx| {
-                all_pending_proofs.iter().any(|p| match p.y() {
-                    Ok(y) => tx.ys.contains(&y),
-                    Err(_) => false,
-                })
-            })
-            .collect::<Vec<_>>();
+            .filter(|tx| tx.status == TransactionStatus::Pending)
+            .collect();
         Ok(pending_txs)
     }
 
