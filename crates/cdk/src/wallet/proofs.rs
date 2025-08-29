@@ -1,8 +1,11 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use cdk_common::wallet::{Transaction, TransactionId, TransactionKind, TransactionStatus};
+use cdk_common::wallet::{
+    Transaction, TransactionId, TransactionKind, TransactionStatus,
+};
 use cdk_common::Id;
 use tracing::instrument;
+use cdk_common::Bolt11Invoice;
 
 use crate::amount::SplitTarget;
 use crate::fees::calculate_fee;
@@ -158,6 +161,49 @@ impl Wallet {
     /// check
     #[instrument(skip(self))]
     pub async fn check_proofs_tx_spent_state(&self) -> Result<(u64, u64), Error> {
+        let mut update_count = 0;
+        let pending_txs = self.list_pending_transactions().await?;
+        let mut cushs: BTreeMap<String, Vec<Transaction>> = BTreeMap::new();
+        let mut lns: BTreeMap<String, Vec<Transaction>> = BTreeMap::new();
+        for tx in pending_txs {
+            if tx.kind == TransactionKind::Cashu {
+                let txs = cushs.entry(tx.mint_url.to_string()).or_default();
+
+                txs.push(tx)
+            } else if tx.kind == TransactionKind::LN {
+                let txs = lns.entry(tx.mint_url.to_string()).or_default();
+
+                txs.push(tx)
+            } else {
+                unreachable!()
+            }
+        }
+
+        for (_m, txs) in lns.iter_mut() {
+            for tx in txs {
+                let invoice: Bolt11Invoice = tx.token.parse()?;
+                if invoice.is_expired() {
+                    tx.status = TransactionStatus::Expired;
+                    self.localstore.add_transaction(tx.clone()).await?;
+                } else {
+                    let quote_id = tx.metadata.get("quote_id");
+                    if quote_id.is_some() {
+                        let res = self
+                            .mint(&quote_id.unwrap(), SplitTarget::default(), None)
+                            .await;
+                        if res.is_ok() {
+                            // need update statue
+                            let tx_new = res?.1;
+                            tx.status = tx_new.status;
+                            // tx.ys = tx_new.ys;
+                            self.localstore.add_transaction(tx.clone()).await?;
+                            update_count += 1;
+                        }
+                    }
+                }
+            }
+        }
+
         let proofs = self
             .localstore
             .get_proofs(
@@ -168,7 +214,9 @@ impl Wallet {
             )
             .await?;
         let pendings_count = proofs.len() as u64;
-        let mut update_count = 0;
+        if pendings_count == 0 {
+            return Ok((update_count, pendings_count));
+        }
         let ps: Vec<Proof> = proofs.clone().into_iter().map(|p| p.proof).collect();
         let spendable = self
             .client
@@ -188,22 +236,6 @@ impl Wallet {
             .partition(|p| spent_states.contains(&p.y));
         // let spend_ys: Vec<PublicKey> = spent_proofs.into_iter().map(|p| p.y).collect();
 
-        let pending_txs = self.list_pending_transactions().await?;
-        let mut cushs: BTreeMap<String, Vec<Transaction>> = BTreeMap::new();
-        let mut lns: BTreeMap<String, Vec<Transaction>> = BTreeMap::new();
-        for tx in pending_txs {
-            if tx.kind == TransactionKind::Cashu {
-                let txs = cushs.entry(tx.mint_url.to_string()).or_default();
-
-                txs.push(tx)
-            } else if tx.kind == TransactionKind::LN {
-                let txs = lns.entry(tx.mint_url.to_string()).or_default();
-
-                txs.push(tx)
-            } else {
-                unreachable!()
-            }
-        }
         for txs in cushs.values_mut() {
             for tx in txs.iter_mut() {
                 let is_spent = spent_proofs.iter().any(|p| match p.proof.y() {
@@ -228,25 +260,6 @@ impl Wallet {
 
         // this is will delete spent proofs in db
         self.localstore.update_proofs(vec![], spent_ys).await?;
-
-        for (_m, txs) in lns.iter_mut() {
-            for tx in txs {
-                let quote_id = tx.metadata.get("quote_id");
-                if quote_id.is_some() {
-                    let res = self
-                        .mint(&quote_id.unwrap(), SplitTarget::default(), None)
-                        .await;
-                    if res.is_ok() {
-                        // need update statue
-                        let tx_new = res?.1;
-                        tx.status = tx_new.status;
-                        tx.ys = tx_new.ys;
-                        self.localstore.add_transaction(tx.clone()).await?;
-                        update_count += 1;
-                    }
-                }
-            }
-        }
 
         Ok((update_count, pendings_count))
     }

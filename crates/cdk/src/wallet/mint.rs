@@ -10,7 +10,7 @@ use crate::dhke::construct_proofs;
 use crate::nuts::nut00::ProofsMethods;
 use crate::nuts::{
     nut12, MintQuoteBolt11Request, MintQuoteBolt11Response, MintRequest, PreMintSecrets, Proofs,
-    SecretKey, SpendingConditions, State
+    SecretKey, SpendingConditions, State,
 };
 use crate::types::ProofInfo;
 use crate::util::unix_time;
@@ -221,6 +221,7 @@ impl Wallet {
         if quote_info.expiry > unix_time {
             tracing::warn!("Attempting to mint with expired quote.");
         }
+        // println!("quote_info.expiry > unix_time {:?},  {:?}", quote_info.expiry, unix_time);
 
         let active_keyset_id = self.get_active_mint_keyset().await?.id;
 
@@ -320,11 +321,12 @@ impl Wallet {
             unit: self.unit.clone(),
             ys: proofs.ys()?,
             token: quote_info.request,
-            status: if quote_info.expiry > unix_time {
-                cdk_common::wallet::TransactionStatus::Expired
-            } else {
-                cdk_common::wallet::TransactionStatus::Success
-            },
+            // status: if quote_info.expiry > unix_time {
+            //     cdk_common::wallet::TransactionStatus::Expired
+            // } else {
+            //     cdk_common::wallet::TransactionStatus::Success
+            // },
+            status: cdk_common::wallet::TransactionStatus::Success,
             timestamp: unix_time,
             memo: None,
             metadata: HashMap::new(),

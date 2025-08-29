@@ -12,7 +12,7 @@ use crate::amount::to_unit;
 use crate::dhke::construct_proofs;
 use crate::nuts::{
     CurrencyUnit, MeltOptions, MeltQuoteBolt11Request, MeltQuoteBolt11Response, MeltRequest,
-    PreMintSecrets, Proofs, ProofsMethods, State
+    PreMintSecrets, Proofs, ProofsMethods, State,
 };
 use crate::types::{Melted, ProofInfo};
 use crate::util::unix_time;
