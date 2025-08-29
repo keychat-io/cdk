@@ -364,7 +364,7 @@ impl Wallet {
 
     /// Restore
     #[instrument(skip(self))]
-    pub async fn restore(&self) -> Result<Amount, Error> {
+    pub async fn restore(&self) -> Result<(Amount, u64), Error> {
         // Check that mint is in store of mints
         if self
             .localstore
@@ -378,6 +378,7 @@ impl Wallet {
         let keysets = self.get_mint_keysets().await?;
 
         let mut restored_value = Amount::ZERO;
+        let mut restored_size = 0;
 
         for keyset in keysets {
             let keys = self.get_keyset_keys(keyset.id).await?;
@@ -446,6 +447,7 @@ impl Wallet {
                     .collect();
 
                 restored_value += unspent_proofs.total_amount()?;
+                restored_size += unspent_proofs.len() as u64;
 
                 let unspent_proofs = unspent_proofs
                     .into_iter()
@@ -467,7 +469,7 @@ impl Wallet {
                 start_counter += 100;
             }
         }
-        Ok(restored_value)
+        Ok((restored_value, restored_size))
     }
 
     /// Verify all proofs in token have meet the required spend

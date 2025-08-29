@@ -475,7 +475,7 @@ impl MultiMintWallet {
 
     /// Restore
     #[instrument(skip(self))]
-    pub async fn restore(&self, wallet_key: &WalletKey) -> Result<Amount, Error> {
+    pub async fn restore(&self, wallet_key: &WalletKey) -> Result<(Amount, u64), Error> {
         let wallets = self.wallets.read().await;
         let wallet = wallets
             .get(wallet_key)

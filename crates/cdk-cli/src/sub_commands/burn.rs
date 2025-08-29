@@ -30,11 +30,11 @@ pub async fn burn(
                 .get_wallet(&WalletKey::new(mint_url.clone(), unit))
                 .await
                 .unwrap();
-            total_burnt = wallet.check_all_pending_proofs().await?;
+            total_burnt = wallet.check_all_pending_proofs().await?.0;
         }
         None => {
             for wallet in multi_mint_wallet.get_wallets().await {
-                let amount_burnt = wallet.check_all_pending_proofs().await?;
+                let amount_burnt = wallet.check_all_pending_proofs().await?.0;
                 total_burnt += amount_burnt;
             }
         }

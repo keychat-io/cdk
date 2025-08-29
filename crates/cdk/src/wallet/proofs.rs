@@ -229,22 +229,31 @@ impl Wallet {
         // this is will delete spent proofs in db
         self.localstore.update_proofs(vec![], spent_ys).await?;
 
-        // for (_m, txs) in lns.iter_mut() {
-
-        //     for tx in txs {
-        //         let res = self.mint(&tx.id().to_string(), SplitTarget::default(), None).await;
-        //         if res.is_ok() {
-        //             update_count += 1;
-        //         }
-        //     }
-        // }
+        for (_m, txs) in lns.iter_mut() {
+            for tx in txs {
+                let quote_id = tx.metadata.get("quote_id");
+                if quote_id.is_some() {
+                    let res = self
+                        .mint(&quote_id.unwrap(), SplitTarget::default(), None)
+                        .await;
+                    if res.is_ok() {
+                        // need update statue
+                        let tx_new = res?.1;
+                        tx.status = tx_new.status;
+                        tx.ys = tx_new.ys;
+                        self.localstore.add_transaction(tx.clone()).await?;
+                        update_count += 1;
+                    }
+                }
+            }
+        }
 
         Ok((update_count, pendings_count))
     }
 
     /// Checks pending proofs for spent status
     #[instrument(skip(self))]
-    pub async fn check_all_pending_proofs(&self) -> Result<Amount, Error> {
+    pub async fn check_all_pending_proofs(&self) -> Result<(Amount, u64, u64), Error> {
         let mut balance = Amount::ZERO;
 
         let proofs = self
@@ -258,7 +267,7 @@ impl Wallet {
             .await?;
 
         if proofs.is_empty() {
-            return Ok(Amount::ZERO);
+            return Ok((Amount::ZERO, 0, 0));
         }
 
         let spendable = self
@@ -298,13 +307,21 @@ impl Wallet {
         self.localstore
             .update_proofs(
                 vec![],
-                non_pending_proofs.into_iter().map(|p| p.y).collect(),
+                non_pending_proofs
+                    .clone()
+                    .into_iter()
+                    .map(|p| p.y)
+                    .collect(),
             )
             .await?;
 
         balance += amount;
 
-        Ok(balance)
+        Ok((
+            balance,
+            non_pending_proofs.len() as u64,
+            pending_proofs.len() as u64,
+        ))
     }
 
     /// Select exact proofs

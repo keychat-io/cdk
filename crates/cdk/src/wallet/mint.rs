@@ -10,7 +10,7 @@ use crate::dhke::construct_proofs;
 use crate::nuts::nut00::ProofsMethods;
 use crate::nuts::{
     nut12, MintQuoteBolt11Request, MintQuoteBolt11Response, MintRequest, PreMintSecrets, Proofs,
-    SecretKey, SpendingConditions, State, Token,
+    SecretKey, SpendingConditions, State
 };
 use crate::types::ProofInfo;
 use crate::util::unix_time;
@@ -83,10 +83,10 @@ impl Wallet {
 
         let quote = MintQuote {
             mint_url: mint_url.clone(),
-            id: quote_res.quote,
+            id: quote_res.quote.clone(),
             amount,
             unit: unit.clone(),
-            request: quote_res.request,
+            request: quote_res.request.clone(),
             state: quote_res.state,
             expiry: quote_res.expiry.unwrap_or(0),
             secret_key: Some(secret_key),
@@ -94,22 +94,25 @@ impl Wallet {
 
         self.localstore.add_mint_quote(quote.clone()).await?;
 
-        // let tx = Transaction {
-        //     mint_url: mint_url,
-        //     direction: TransactionDirection::Incoming,
-        //     kind: TransactionKind::LN,
-        //     amount: amount,
-        //     fee: Amount::ZERO,
-        //     unit: unit,
-        //     ys: vec![quote_res.pubkey.unwrap()],
-        //     token: "".to_string(),
-        //     status: cdk_common::wallet::TransactionStatus::Pending,
-        //     timestamp: unix_time(),
-        //     memo: None,
-        //     metadata: HashMap::new(),
-        // };
-        // // Add transaction to store
-        // self.localstore.add_transaction(tx.clone()).await?;
+        let mut metadata = HashMap::new();
+        metadata.insert("quote_id".to_string(), quote_res.quote);
+
+        let tx = Transaction {
+            mint_url,
+            direction: TransactionDirection::Incoming,
+            kind: TransactionKind::LN,
+            amount,
+            fee: Amount::ZERO,
+            unit,
+            ys: vec![quote_res.pubkey.unwrap()],
+            token: quote_res.request,
+            status: cdk_common::wallet::TransactionStatus::Pending,
+            timestamp: unix_time(),
+            memo: None,
+            metadata,
+        };
+        // Add transaction to store
+        self.localstore.add_transaction(tx.clone()).await?;
 
         Ok(quote)
     }
@@ -308,13 +311,6 @@ impl Wallet {
         // Add new proofs to store
         self.localstore.update_proofs(proof_infos, vec![]).await?;
 
-        let token = Token::new(
-            self.mint_url.clone(),
-            proofs.clone(),
-            None,
-            self.unit.clone(),
-        );
-
         let tx = Transaction {
             mint_url: self.mint_url.clone(),
             direction: TransactionDirection::Incoming,
@@ -323,14 +319,19 @@ impl Wallet {
             fee: Amount::ZERO,
             unit: self.unit.clone(),
             ys: proofs.ys()?,
-            token: token.to_v3_string(),
-            status: cdk_common::wallet::TransactionStatus::Success,
+            token: quote_info.request,
+            status: if quote_info.expiry > unix_time {
+                cdk_common::wallet::TransactionStatus::Expired
+            } else {
+                cdk_common::wallet::TransactionStatus::Success
+            },
             timestamp: unix_time,
             memo: None,
             metadata: HashMap::new(),
         };
-        // Add transaction to store
-        self.localstore.add_transaction(tx.clone()).await?;
+
+        // // Add transaction to store
+        // self.localstore.add_transaction(tx.clone()).await?;
 
         Ok((proofs, tx))
     }
