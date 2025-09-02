@@ -20,7 +20,8 @@ pub async fn fund_wallet(wallet: Arc<Wallet>, amount: Amount) {
     let quote = wallet
         .mint_quote(amount, None)
         .await
-        .expect("Could not get mint quote");
+        .expect("Could not get mint quote")
+        .0;
 
     wait_for_mint_to_be_paid(&wallet, &quote.id, 60)
         .await

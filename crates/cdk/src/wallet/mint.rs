@@ -48,7 +48,7 @@ impl Wallet {
         &self,
         amount: Amount,
         description: Option<String>,
-    ) -> Result<MintQuote, Error> {
+    ) -> Result<(MintQuote, Transaction), Error> {
         let mint_url = self.mint_url.clone();
         let unit = self.unit.clone();
 
@@ -114,7 +114,7 @@ impl Wallet {
         // Add transaction to store
         self.localstore.add_transaction(tx.clone()).await?;
 
-        Ok(quote)
+        Ok((quote, tx))
     }
 
     /// Check mint quote status

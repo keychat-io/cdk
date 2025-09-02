@@ -1,11 +1,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use cdk_common::wallet::{
-    Transaction, TransactionId, TransactionKind, TransactionStatus,
-};
+use cdk_common::wallet::{Transaction, TransactionId, TransactionKind, TransactionStatus};
+use cdk_common::Bolt11Invoice;
 use cdk_common::Id;
 use tracing::instrument;
-use cdk_common::Bolt11Invoice;
 
 use crate::amount::SplitTarget;
 use crate::fees::calculate_fee;

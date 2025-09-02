@@ -318,7 +318,7 @@ pub async fn fund_wallet(
     split_target: Option<SplitTarget>,
 ) -> Result<Amount> {
     let desired_amount = Amount::from(amount);
-    let quote = wallet.mint_quote(desired_amount, None).await?;
+    let quote = wallet.mint_quote(desired_amount, None).await?.0;
 
     wait_for_mint_to_be_paid(&wallet, &quote.id, 60).await?;
 

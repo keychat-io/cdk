@@ -336,7 +336,7 @@ impl MultiMintWallet {
             .get(wallet_key)
             .ok_or(Error::UnknownWallet(wallet_key.clone()))?;
 
-        wallet.mint_quote(amount, description).await
+        Ok(wallet.mint_quote(amount, description).await?.0)
     }
 
     /// Check all mint quotes

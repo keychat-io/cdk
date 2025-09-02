@@ -44,7 +44,10 @@ pub async fn mint(
             let amount = sub_command_args
                 .amount
                 .ok_or(anyhow!("Amount must be defined"))?;
-            let quote = wallet.mint_quote(Amount::from(amount), description).await?;
+            let quote = wallet
+                .mint_quote(Amount::from(amount), description)
+                .await?
+                .0;
 
             println!("Quote: {quote:#?}");
 
