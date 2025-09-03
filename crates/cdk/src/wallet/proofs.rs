@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use cdk_common::util::unix_time;
 use cdk_common::wallet::{Transaction, TransactionId, TransactionKind, TransactionStatus};
-use cdk_common::Bolt11Invoice;
-use cdk_common::Id;
+use cdk_common::{Bolt11Invoice, Id, MintQuoteState};
 use tracing::instrument;
 
 use crate::amount::SplitTarget;
@@ -183,19 +183,29 @@ impl Wallet {
                 if invoice.is_expired() {
                     tx.status = TransactionStatus::Expired;
                     self.localstore.add_transaction(tx.clone()).await?;
-                } else {
-                    let quote_id = tx.metadata.get("quote_id");
-                    if quote_id.is_some() {
-                        let res = self
-                            .mint(&quote_id.unwrap(), SplitTarget::default(), None)
-                            .await;
-                        if res.is_ok() {
-                            // need update statue
-                            let tx_new = res?.1;
-                            tx.status = tx_new.status;
-                            // tx.ys = tx_new.ys;
-                            self.localstore.add_transaction(tx.clone()).await?;
-                            update_count += 1;
+                    continue;
+                } 
+                if let  Some(quote_id) = tx.metadata.get("quote_id") {
+                    let mint_quote = self.localstore.get_mint_quote(quote_id).await?;
+                    let mint_quote_response = self.mint_quote_state(quote_id).await?;
+
+                    match mint_quote_response.state {
+                        MintQuoteState::Paid => {
+                            if let Ok(res) = self.mint(quote_id, SplitTarget::default(), None).await {
+                                let tx_new = res.1;
+                                tx.status = tx_new.status;
+                                self.localstore.add_transaction(tx.clone()).await?;
+                                update_count += 1;
+                            }
+                        }
+                        _ => {
+                            if let Some(mint_quote) = mint_quote {
+                                if mint_quote.expiry.le(&unix_time()) {
+                                    tx.status = TransactionStatus::Expired;
+                                    self.localstore.add_transaction(tx.clone()).await?;
+                                    self.localstore.remove_mint_quote(quote_id).await?;
+                                }
+                            }
                         }
                     }
                 }
