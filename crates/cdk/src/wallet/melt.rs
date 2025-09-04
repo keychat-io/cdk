@@ -254,6 +254,9 @@ impl Wallet {
             .update_proofs(change_proof_infos, deleted_ys)
             .await?;
 
+        let mut metadata = HashMap::new();
+        metadata.insert("quote_id".to_string(), quote_id.to_string());
+
         let tx = Transaction {
             mint_url: self.mint_url.clone(),
             direction: TransactionDirection::Outgoing,
@@ -270,7 +273,7 @@ impl Wallet {
             },
             timestamp: unix_time(),
             memo: None,
-            metadata: HashMap::new(),
+            metadata,
         };
         // Add transaction to store
         self.localstore.add_transaction(tx.clone()).await?;
