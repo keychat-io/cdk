@@ -296,7 +296,7 @@ impl Wallet {
             fee: total_send_fee,
             unit: self.unit.clone(),
             ys: proofs_to_send.ys()?,
-            token: token.to_v3_string(),
+            token: token.to_string(),
             status: cdk_common::wallet::TransactionStatus::Pending,
             timestamp: unix_time(),
             memo: memo.clone(),

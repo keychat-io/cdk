@@ -181,7 +181,7 @@ impl Wallet {
             fee: proofs_amount - total_amount,
             unit: self.unit.clone(),
             ys: proofs_ys,
-            token: token.to_v3_string(),
+            token: token.to_string(),
             status: cdk_common::wallet::TransactionStatus::Success,
             timestamp: unix_time(),
             memo,

@@ -332,9 +332,7 @@ impl Wallet {
             metadata: HashMap::new(),
         };
 
-        // // Add transaction to store
-        // self.localstore.add_transaction(tx.clone()).await?;
-
+        //have add transaction in fn request_mint, then will update in checking mint quote
         Ok((proofs, tx))
     }
 }

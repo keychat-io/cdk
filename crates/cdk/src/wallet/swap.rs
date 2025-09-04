@@ -30,10 +30,8 @@ impl Wallet {
             .create_swap_denomination(denomination, amount, input_proofs.clone(), include_fees)
             .await?;
         let fee = pre_swap.fee;
-        // println!("fee: {:?}", fee);
 
         let swap_response = self.client.post_swap(pre_swap.swap_request).await?;
-        // println!("swap_response: {:?}", swap_response);
 
         let active_keyset_id = pre_swap.pre_mint_secrets.keyset_id;
 
@@ -144,7 +142,7 @@ impl Wallet {
                 fee,
                 unit: unit.clone(),
                 ys: input_proofs.ys()?,
-                token: token.to_v3_string(),
+                token: token.to_string(),
                 status: cdk_common::wallet::TransactionStatus::Success,
                 timestamp: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
