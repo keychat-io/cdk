@@ -47,7 +47,7 @@ impl Wallet {
         let mut proofs = proofs;
 
         let proofs_amount = proofs.total_amount()?;
-        let proofs_ys = proofs.ys()?;
+        // let proofs_ys = proofs.ys()?;
 
         let mut sig_flag = SigFlag::SigInputs;
 
@@ -168,7 +168,7 @@ impl Wallet {
 
         let token = Token::new(
             self.mint_url.clone(),
-            recv_proofs,
+            recv_proofs.clone(),
             memo.clone(),
             self.unit.clone(),
         );
@@ -180,7 +180,8 @@ impl Wallet {
             amount: total_amount,
             fee: proofs_amount - total_amount,
             unit: self.unit.clone(),
-            ys: proofs_ys,
+            // ys: proofs_ys,
+            ys: recv_proofs.ys()?,
             token: token.to_string(),
             status: cdk_common::wallet::TransactionStatus::Success,
             timestamp: unix_time(),

@@ -138,7 +138,8 @@ impl Wallet {
                 mint_url: mint_url.clone(),
                 direction: TransactionDirection::Split,
                 kind: TransactionKind::Cashu,
-                amount: amount.unwrap_or(Amount::ZERO),
+                // amount: amount.unwrap_or(Amount::ZERO),
+                amount: 32.into(), // dummy amount for swap txns
                 fee,
                 unit: unit.clone(),
                 ys: input_proofs.ys()?,
