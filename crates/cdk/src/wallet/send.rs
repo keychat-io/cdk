@@ -122,6 +122,48 @@ impl Wallet {
             .await
     }
 
+    /// Prepare A Send Transaction for one stamp with enought funds
+    ///
+    /// This function prepares a send transaction by selecting proofs to send and proofs to swap.
+    /// By doing so, it ensures that the wallet user is able to view the fees associated with the send transaction.
+    ///
+    #[instrument(skip(self), err)]
+    pub async fn prepare_send_one_with_enough(
+        &self,
+        amount: Amount,
+        opts: SendOptions,
+    ) -> Result<PreparedSend, Error> {
+        tracing::info!("Preparing send");
+
+        // Get available proofs matching conditions
+        let available_proofs = self
+            .get_proofs_with(
+                Some(vec![State::Unspent]),
+                opts.conditions.clone().map(|c| vec![c]),
+            )
+            .await?;
+
+        if let Some(proof) = available_proofs.into_iter().find(|p| p.amount == amount) {
+            let mut proofs_to_send = Proofs::new();
+            proofs_to_send.push(proof);
+
+            self.localstore
+                .update_proofs_state(proofs_to_send.ys()?, State::Reserved)
+                .await?;
+
+            return Ok(PreparedSend {
+                amount,
+                options: opts,
+                proofs_to_swap: Proofs::new(),
+                swap_fee: Amount::ZERO,
+                proofs_to_send,
+                send_fee: Amount::ZERO,
+            });
+        }
+
+        Err(Error::InsufficientFunds)
+    }
+
     async fn internal_prepare_send(
         &self,
         amount: Amount,
@@ -196,6 +238,75 @@ impl Wallet {
             proofs_to_send,
             send_fee,
         })
+    }
+
+    /// Finalize A Send one stamp Transaction
+    ///
+    /// This function finalizes a send transaction by constructing a token the [`PreparedSend`].
+    /// See [`Wallet::prepare_send`] for more information.
+    #[instrument(skip(self), err)]
+    pub async fn send_one(
+        &self,
+        send: PreparedSend,
+        memo: Option<SendMemo>,
+    ) -> Result<Transaction, Error> {
+        let proofs_to_send = send.proofs_to_send;
+        // Check if proofs are reserved or unspent
+        let sendable_proof_ys = self
+            .get_proofs_with(
+                Some(vec![State::Reserved, State::Unspent]),
+                send.options.conditions.clone().map(|c| vec![c]),
+            )
+            .await?
+            .ys()?;
+        if proofs_to_send
+            .ys()?
+            .iter()
+            .any(|y| !sendable_proof_ys.contains(y))
+        {
+            tracing::warn!("Proofs to send are not reserved or unspent");
+            return Err(Error::UnexpectedProofState);
+        }
+
+        // Update proofs state to pending spent
+        tracing::debug!(
+            "Updating proofs state to pending spent: {:?}",
+            proofs_to_send.ys()?
+        );
+        self.localstore
+            .update_proofs_state(proofs_to_send.ys()?, State::PendingSpent)
+            .await?;
+
+        // Include token memo
+        let send_memo = send.options.memo.or(memo);
+        let memo = send_memo.and_then(|m| if m.include_memo { Some(m.memo) } else { None });
+
+        let token = Token::new(
+            self.mint_url.clone(),
+            proofs_to_send.clone(),
+            memo.clone(),
+            self.unit.clone(),
+        );
+
+        let tx = Transaction {
+            mint_url: self.mint_url.clone(),
+            direction: TransactionDirection::Outgoing,
+            kind: TransactionKind::Cashu,
+            amount: send.amount,
+            fee: Amount::ZERO,
+            unit: self.unit.clone(),
+            ys: proofs_to_send.ys()?,
+            token: token.to_string(),
+            status: cdk_common::wallet::TransactionStatus::Pending,
+            timestamp: unix_time(),
+            memo: memo.clone(),
+            metadata: send.options.metadata,
+        };
+        // Add transaction to store
+        self.localstore.add_transaction(tx.clone()).await?;
+
+        // Create and return token
+        Ok(tx)
     }
 
     /// Finalize A Send Transaction

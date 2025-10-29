@@ -184,14 +184,15 @@ impl Wallet {
                     tx.status = TransactionStatus::Expired;
                     self.localstore.add_transaction(tx.clone()).await?;
                     continue;
-                } 
-                if let  Some(quote_id) = tx.metadata.get("quote_id") {
+                }
+                if let Some(quote_id) = tx.metadata.get("quote_id") {
                     let mint_quote = self.localstore.get_mint_quote(quote_id).await?;
                     let mint_quote_response = self.mint_quote_state(quote_id).await?;
 
                     match mint_quote_response.state {
                         MintQuoteState::Paid => {
-                            if let Ok(res) = self.mint(quote_id, SplitTarget::default(), None).await {
+                            if let Ok(res) = self.mint(quote_id, SplitTarget::default(), None).await
+                            {
                                 let tx_new = res.1;
                                 tx.status = tx_new.status;
                                 self.localstore.add_transaction(tx.clone()).await?;
