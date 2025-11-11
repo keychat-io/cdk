@@ -240,10 +240,11 @@ impl Wallet {
             .map(|s| s.y)
             .collect();
 
+        // first check spent proofs , then update tx status
         let (spent_proofs, _non_spent_proofs): (Vec<ProofInfo>, Vec<ProofInfo>) = proofs
+            .clone()
             .into_iter()
             .partition(|p| spent_states.contains(&p.y));
-        // let spend_ys: Vec<PublicKey> = spent_proofs.into_iter().map(|p| p.y).collect();
 
         for txs in cushs.values_mut() {
             for tx in txs.iter_mut() {
@@ -259,21 +260,160 @@ impl Wallet {
             }
         }
         // after update tx , then can del proof which spent
-        let spent_ys: Vec<_> = states
-            .iter()
-            .filter_map(|p| match p.state {
-                State::Spent => Some(p.y),
-                _ => None,
-            })
+        let spent_ys: Vec<PublicKey> = spent_proofs.into_iter().map(|p| p.y).collect();
+
+        let pending_states: HashSet<PublicKey> = states
+            .into_iter()
+            .filter(|s| s.state.ne(&State::Spent))
+            .map(|s| s.y)
             .collect();
 
+        let (_pending_proofs, non_pending_proofs): (Vec<ProofInfo>, Vec<ProofInfo>) = proofs
+            .into_iter()
+            .partition(|p| pending_states.contains(&p.y));
+
+        let non_pending_ys: Vec<PublicKey> = non_pending_proofs
+            .clone()
+            .into_iter()
+            .map(|p| p.y)
+            .collect();
+
+        // Union spent_ys and non_pending_ys (ensure uniqueness)
+        let mut delete_set: HashSet<PublicKey> = spent_ys.into_iter().collect();
+        delete_set.extend(non_pending_ys.into_iter());
+        let delete_all: Vec<PublicKey> = delete_set.into_iter().collect();
+
         // this is will delete spent proofs in db
-        self.localstore.update_proofs(vec![], spent_ys).await?;
+        self.localstore.update_proofs(vec![], delete_all).await?;
 
         Ok((update_count, pendings_count))
     }
 
-    /// Checks pending proofs for spent status
+    /// Checks proofs from mint
+    #[instrument(skip(self))]
+    pub async fn check_proofs_from_mint(&self) -> Result<(), Error> {
+        // get all proofs
+        let proofs = self
+            .localstore
+            .get_proofs(
+                Some(self.mint_url.clone()),
+                Some(self.unit.clone()),
+                Some(vec![
+                    State::Spent,
+                    State::Unspent,
+                    State::Pending,
+                    State::Reserved,
+                    State::PendingSpent,
+                ]),
+                None,
+            )
+            .await?;
+        if proofs.is_empty() {
+            return Ok(());
+        }
+
+        let spendable = self
+            .client
+            .post_check_state(CheckStateRequest {
+                ys: proofs
+                    .clone()
+                    .into_iter()
+                    .map(|p| p.proof)
+                    .collect::<Vec<_>>()
+                    .ys()?,
+            })
+            .await?;
+
+        let states = spendable.states;
+
+        // check diff states
+        let server_state_map: HashMap<PublicKey, State> =
+            states.iter().map(|s| (s.y, s.state)).collect();
+
+        let mut mismatches: Vec<(PublicKey, State, State)> = Vec::new();
+        let mut missing_on_server: Vec<PublicKey> = Vec::new();
+
+        let mut delete_spent: Vec<PublicKey> = Vec::new();
+        let mut to_pending_spent: Vec<PublicKey> = Vec::new();
+        let mut to_pending: Vec<PublicKey> = Vec::new();
+        for p in proofs.iter() {
+            if let Some(remote) = server_state_map.get(&p.y) {
+                if *remote == p.state {
+                    continue;
+                }
+                mismatches.push((p.y, p.state, *remote));
+            } else {
+                missing_on_server.push(p.y);
+            }
+        }
+        if !mismatches.is_empty() {
+            for (y, local, remote) in &mismatches {
+                tracing::warn!(
+                    "proof state mismatch y={:?} local={:?} remote={:?}",
+                    y,
+                    local,
+                    remote
+                );
+            }
+        }
+        if !missing_on_server.is_empty() {
+            tracing::warn!(
+                "server did not return {} local ys; example: {:?}",
+                missing_on_server.len(),
+                missing_on_server.get(0)
+            );
+            tracing::warn!("missing ys: {:?}", missing_on_server);
+        }
+
+        for (y, local, remote) in &mismatches {
+            match remote {
+                State::Spent => {
+                    delete_spent.push(*y);
+                }
+                State::PendingSpent => {
+                    if *local != State::PendingSpent {
+                        to_pending_spent.push(*y);
+                    }
+                }
+                State::Pending => {
+                    if *local == State::Unspent {
+                        to_pending.push(*y);
+                    }
+                }
+                // do nothing
+                _ => {}
+            }
+        }
+        tracing::warn!(
+            "To delete spent: {}, to pending spent: {}, to pending: {}",
+            delete_spent.len(),
+            to_pending_spent.len(),
+            to_pending.len()
+        );
+
+        //  // delete spent proofs
+        //  if !delete_spent.is_empty() {
+        //     self.localstore.update_proofs(vec![], delete_spent).await?;
+        // }
+        // // update to pending spent
+        // if !to_pending_spent.is_empty() {
+        //     self.localstore
+        //         .update_proofs_state(to_pending_spent, State::PendingSpent)
+        //         .await?;
+        // }
+
+        // now only update pending proofs, update to pending
+        if !to_pending.is_empty() {
+            self.localstore
+                .update_proofs_state(to_pending, State::Pending)
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    /// Checks pending proofs for spent status, this is the same function as
+    /// `check_proofs_tx_spent_state` so it can be refactored later.
     #[instrument(skip(self))]
     pub async fn check_all_pending_proofs(&self) -> Result<(Amount, u64, u64), Error> {
         let mut balance = Amount::ZERO;
@@ -305,10 +445,6 @@ impl Wallet {
             .await?;
 
         let states = spendable.states;
-
-        // let states = self
-        //     .check_proofs_spent(proofs.clone().into_iter().map(|p| p.proof).collect())
-        //     .await?;
 
         // Both `State::Pending` and `State::Unspent` should be included in the pending
         // table. This is because a proof that has been created to send will be
