@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::str::FromStr;
 
 use cdk_common::util::unix_time;
 use cdk_common::wallet::{Transaction, TransactionId, TransactionKind, TransactionStatus};
@@ -154,6 +155,53 @@ impl Wallet {
         self.localstore.update_proofs(vec![], spent_ys).await?;
 
         Ok(spendable.states)
+    }
+
+    /// check
+    #[instrument(skip(self))]
+    pub async fn check_proofs_single_tx_spent_state(&self, tx_id: String) -> Result<u64, Error> {
+        let mut update_count = 0;
+        let tx = self
+            .localstore
+            .get_transaction(TransactionId::from_str(&tx_id)?)
+            .await?;
+        if tx.is_none() {
+            return Ok(0);
+        }
+        let mut tx = tx.unwrap();
+        if tx.status == TransactionStatus::Success {
+            return Ok(0);
+        }
+        if tx.kind == TransactionKind::Cashu {
+            return Ok(0);
+        } else if tx.kind == TransactionKind::LN {
+            if let Some(quote_id) = tx.metadata.get("quote_id") {
+                let mint_quote = self.localstore.get_mint_quote(quote_id).await?;
+                let mint_quote_response = self.mint_quote_state(quote_id).await?;
+
+                match mint_quote_response.state {
+                    MintQuoteState::Paid => {
+                        let res = self.mint(quote_id, SplitTarget::default(), None).await?;
+                        let tx_new = res.1;
+                        tx.status = tx_new.status;
+                        self.localstore.add_transaction(tx.clone()).await?;
+                        update_count += 1;
+                    }
+                    _ => {
+                        if let Some(mint_quote) = mint_quote {
+                            if mint_quote.expiry.le(&unix_time()) {
+                                tx.status = TransactionStatus::Expired;
+                                self.localstore.add_transaction(tx.clone()).await?;
+                                self.localstore.remove_mint_quote(quote_id).await?;
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            unreachable!()
+        }
+        Ok(update_count)
     }
 
     /// check
