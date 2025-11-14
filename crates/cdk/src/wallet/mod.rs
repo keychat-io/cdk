@@ -381,9 +381,9 @@ impl Wallet {
         let mut restored_size = 0;
 
         for keyset in keysets {
-            // if !keyset.active || keyset.unit != self.unit {
-            //     continue;
-            // }
+            if !keyset.active || keyset.unit != self.unit {
+                continue;
+            }
             let keys = self.get_keyset_keys(keyset.id).await?;
             let mut empty_batch = 0;
             let mut start_counter = 0;

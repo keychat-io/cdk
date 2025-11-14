@@ -121,6 +121,11 @@ impl Wallet {
             .filter_map(|(p, s)| (s.state == State::Unspent).then_some(p))
             .collect();
 
+        tracing::info!("Reclaiming unspent proofs: {:?}", unspent);
+        if unspent.is_empty() {
+            tracing::warn!("No unspent proofs to reclaim");
+            return Ok(());
+        }
         self.swap(None, SplitTarget::default(), unspent, None, false)
             .await?;
 
