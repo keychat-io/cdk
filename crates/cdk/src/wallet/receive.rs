@@ -1,5 +1,7 @@
+use cdk_common::Amount;
 use std::collections::HashMap;
 use std::str::FromStr;
+use tokio::time::{timeout, Duration};
 
 use bitcoin::hashes::sha256::Hash as Sha256Hash;
 use bitcoin::hashes::Hash;
@@ -47,7 +49,28 @@ impl Wallet {
         let mut proofs = proofs;
 
         let proofs_amount = proofs.total_amount()?;
-        // let proofs_ys = proofs.ys()?;
+
+        let token_tmp = Token::new(
+            self.mint_url.clone(),
+            proofs.clone(),
+            memo.clone(),
+            self.unit.clone(),
+        );
+
+        let mut tx = Transaction {
+            mint_url: self.mint_url.clone(),
+            direction: TransactionDirection::Incoming,
+            kind: TransactionKind::Cashu,
+            amount: proofs_amount,
+            fee: Amount::ZERO,
+            unit: self.unit.clone(),
+            ys: proofs.ys()?,
+            token: token_tmp.to_string(),
+            status: cdk_common::wallet::TransactionStatus::Failed,
+            timestamp: unix_time(),
+            memo: memo.clone(),
+            metadata: opts.metadata,
+        };
 
         let mut sig_flag = SigFlag::SigInputs;
 
@@ -138,7 +161,26 @@ impl Wallet {
             }
         }
 
-        let swap_response = self.client.post_swap(pre_swap.swap_request).await?;
+        // if this errors here, the pending proofs will be cleaned up in the swap cancellation process
+        // let swap_response = self.client.post_swap(pre_swap.swap_request).await;
+        let swap_response = timeout(
+            Duration::from_secs(15),
+            self.client.post_swap(pre_swap.swap_request),
+        )
+        .await;
+        let swap_response = match swap_response {
+            Ok(Ok(res)) => res,
+            Ok(Err(err)) => {
+                tracing::error!("post_swap failed: {}", err);
+                self.localstore.add_transaction(tx.clone()).await?;
+                return Err(err);
+            }
+            Err(_) => {
+                tracing::warn!("post_swap timed out after 15s");
+                self.localstore.add_transaction(tx.clone()).await?;
+                return Err(Error::Timeout);
+            }
+        };
 
         // Proof to keep
         let recv_proofs = construct_proofs(
@@ -172,22 +214,14 @@ impl Wallet {
             memo.clone(),
             self.unit.clone(),
         );
+        // execute after successful swap
+        // when failed or timeout or error, must know they have diff ys, so will have multi txs in db
+        tx.amount = total_amount;
+        tx.fee = proofs_amount - total_amount;
+        tx.ys = recv_proofs.ys()?;
+        tx.token = token.to_string();
+        tx.status = cdk_common::wallet::TransactionStatus::Success;
 
-        let tx = Transaction {
-            mint_url: self.mint_url.clone(),
-            direction: TransactionDirection::Incoming,
-            kind: TransactionKind::Cashu,
-            amount: total_amount,
-            fee: proofs_amount - total_amount,
-            unit: self.unit.clone(),
-            // ys: proofs_ys,
-            ys: recv_proofs.ys()?,
-            token: token.to_string(),
-            status: cdk_common::wallet::TransactionStatus::Success,
-            timestamp: unix_time(),
-            memo,
-            metadata: opts.metadata,
-        };
         // Add transaction to store
         self.localstore.add_transaction(tx.clone()).await?;
 

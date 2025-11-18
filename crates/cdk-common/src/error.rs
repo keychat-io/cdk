@@ -92,6 +92,10 @@ pub enum Error {
     #[error("Amountless invoices are not supported for unit `{0}` and method `{1}`")]
     AmountlessInvoiceNotSupported(CurrencyUnit, PaymentMethod),
 
+    /// Http request timed out
+    #[error("Http request timed out")]
+    Timeout,
+
     /// Internal Error - Send error
     #[error("Internal send error: {0}")]
     SendError(String),

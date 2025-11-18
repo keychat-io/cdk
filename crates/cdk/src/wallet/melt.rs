@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::str::FromStr;
+use tokio::time::{timeout, Duration};
 
 use cdk_common::amount::SplitTarget;
 use cdk_common::nut05;
@@ -124,11 +125,29 @@ impl Wallet {
         invoice: String,
         proofs: Proofs,
     ) -> Result<(Melted, Transaction), Error> {
+        let mut metadata = HashMap::new();
+        metadata.insert("quote_id".to_string(), quote_id.to_string());
+
         let quote_info = self
             .localstore
             .get_melt_quote(quote_id)
             .await?
             .ok_or(Error::UnknownQuote)?;
+
+        let mut tx = Transaction {
+            mint_url: self.mint_url.clone(),
+            direction: TransactionDirection::Outgoing,
+            kind: TransactionKind::LN,
+            amount: quote_info.amount,
+            fee: quote_info.fee_reserve,
+            unit: self.unit.clone(),
+            ys: proofs.ys()?,
+            token: invoice,
+            status: TransactionStatus::Failed,
+            timestamp: unix_time(),
+            memo: None,
+            metadata,
+        };
 
         ensure_cdk!(
             quote_info.expiry.gt(&unix_time()),
@@ -167,16 +186,30 @@ impl Wallet {
             Some(premint_secrets.blinded_messages()),
         );
 
-        let melt_response = self.client.post_melt(request).await;
+        // let melt_response = self.client.post_melt(request).await;
+        let melt_response = timeout(Duration::from_secs(15), self.client.post_melt(request)).await;
+
+        // Handle timeout or HTTP errors
+        let melt_response = match melt_response {
+            Ok(res) => res, // Result<_, Error>
+            Err(_elapsed) => {
+                tracing::error!("Could not melt: request timed out after 15s");
+
+                tracing::info!("Checking status of input proofs.");
+                self.reclaim_unspent(proofs).await?;
+                self.localstore.add_transaction(tx.clone()).await?;
+                return Err(Error::Timeout);
+            }
+        };
 
         let melt_response = match melt_response {
             Ok(melt_response) => melt_response,
             Err(err) => {
                 tracing::error!("Could not melt: {}", err);
+
                 tracing::info!("Checking status of input proofs.");
-
                 self.reclaim_unspent(proofs).await?;
-
+                self.localstore.add_transaction(tx.clone()).await?;
                 return Err(err);
             }
         };
@@ -254,27 +287,14 @@ impl Wallet {
             .update_proofs(change_proof_infos, deleted_ys)
             .await?;
 
-        let mut metadata = HashMap::new();
-        metadata.insert("quote_id".to_string(), quote_id.to_string());
-
-        let tx = Transaction {
-            mint_url: self.mint_url.clone(),
-            direction: TransactionDirection::Outgoing,
-            kind: TransactionKind::LN,
-            amount: melted.amount,
-            fee: melted.fee_paid,
-            unit: self.unit.clone(),
-            ys: proofs.ys()?,
-            token: invoice,
-            status: if melted.state == nut05::QuoteState::Paid {
-                TransactionStatus::Success
-            } else {
-                TransactionStatus::Failed
-            },
-            timestamp: unix_time(),
-            memo: None,
-            metadata,
+        // if success then update tx status and fee
+        tx.status = if melted.state == nut05::QuoteState::Paid {
+            TransactionStatus::Success
+        } else {
+            TransactionStatus::Failed
         };
+        tx.fee = melted.fee_paid;
+
         // Add transaction to store
         self.localstore.add_transaction(tx.clone()).await?;
 

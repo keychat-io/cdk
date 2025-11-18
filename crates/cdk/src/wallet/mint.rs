@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use tokio::time::{timeout, Duration};
 
 use cdk_common::nut04::MintMethodOptions;
 use cdk_common::wallet::{Transaction, TransactionDirection, TransactionKind};
@@ -221,7 +222,6 @@ impl Wallet {
         if quote_info.expiry > unix_time {
             tracing::warn!("Attempting to mint with expired quote.");
         }
-        // println!("quote_info.expiry > unix_time {:?},  {:?}", quote_info.expiry, unix_time);
 
         let active_keyset_id = self.get_active_mint_keyset().await?.id;
 
@@ -258,7 +258,35 @@ impl Wallet {
             request.sign(secret_key)?;
         }
 
-        let mint_res = self.client.post_mint(request).await?;
+        let mut tx = self
+            .list_pending_transactions()
+            .await?
+            .into_iter()
+            .find(|t| {
+                t.kind == TransactionKind::LN
+                    && t.direction == TransactionDirection::Incoming
+                    && t.metadata.get("quote_id") == Some(&quote_id.to_string())
+            })
+            .ok_or(Error::TransactionNotFound)?;
+
+        // let mint_res = self.client.post_mint(request).await?;
+        // Set a timeout for the mint request
+        let mint_res = timeout(Duration::from_secs(15), self.client.post_mint(request)).await;
+        let mint_res = match mint_res {
+            Ok(Ok(res)) => res,
+            Ok(Err(err)) => {
+                tracing::error!("post_mint failed: {}", err);
+                tx.status = cdk_common::wallet::TransactionStatus::Failed;
+                self.localstore.add_transaction(tx.clone()).await?;
+                return Err(err);
+            }
+            Err(_) => {
+                tracing::warn!("post_mint timed out after 15s");
+                tx.status = cdk_common::wallet::TransactionStatus::Failed;
+                self.localstore.add_transaction(tx.clone()).await?;
+                return Err(Error::Timeout);
+            }
+        };
 
         let keys = self.get_keyset_keys(active_keyset_id).await?;
 
@@ -312,27 +340,14 @@ impl Wallet {
         // Add new proofs to store
         self.localstore.update_proofs(proof_infos, vec![]).await?;
 
-        let tx = Transaction {
-            mint_url: self.mint_url.clone(),
-            direction: TransactionDirection::Incoming,
-            kind: TransactionKind::LN,
-            amount: proofs.total_amount()?,
-            fee: Amount::ZERO,
-            unit: self.unit.clone(),
-            ys: proofs.ys()?,
-            token: quote_info.request,
-            // status: if quote_info.expiry > unix_time {
-            //     cdk_common::wallet::TransactionStatus::Expired
-            // } else {
-            //     cdk_common::wallet::TransactionStatus::Success
-            // },
-            status: cdk_common::wallet::TransactionStatus::Success,
-            timestamp: unix_time,
-            memo: None,
-            metadata: HashMap::new(),
-        };
+        // update transaction info
+        tx.amount = proofs.total_amount()?;
+        tx.timestamp = unix_time;
+        // tx.ys = proofs.ys()?;
+        tx.status = cdk_common::wallet::TransactionStatus::Success;
 
-        //have add transaction in fn request_mint, then will update in checking mint quote
+        // have add transaction in fn request_mint,
+        // then will update in checking mint quote
         Ok((proofs, tx))
     }
 }
