@@ -57,7 +57,7 @@ impl Wallet {
             unit: self.unit.clone(),
             options,
         };
-
+        // if melt again will have error `mint quote already issued`
         let quote_res = self.client.post_melt_quote(quote_request).await?;
 
         if self.unit == CurrencyUnit::Msat || self.unit == CurrencyUnit::Sat {
@@ -133,21 +133,40 @@ impl Wallet {
             .get_melt_quote(quote_id)
             .await?
             .ok_or(Error::UnknownQuote)?;
+        // need to get tx if have or create new tx
+        let mut tx = {
+            let existing = self
+                .list_pending_failed_transactions()
+                .await?
+                .into_iter()
+                .find(|t| {
+                    t.kind == TransactionKind::LN
+                        && t.direction == TransactionDirection::Outgoing
+                        && t.metadata.get("quote_id") == Some(&quote_id.to_string())
+                });
 
-        let mut tx = Transaction {
-            mint_url: self.mint_url.clone(),
-            direction: TransactionDirection::Outgoing,
-            kind: TransactionKind::LN,
-            amount: quote_info.amount,
-            fee: quote_info.fee_reserve,
-            unit: self.unit.clone(),
-            ys: proofs.ys()?,
-            token: invoice,
-            status: TransactionStatus::Failed,
-            timestamp: unix_time(),
-            memo: None,
-            metadata,
+            match existing {
+                Some(t) => t,
+                None => {
+                    tracing::info!("Creating new transaction for melt quote {}", quote_id);
+                    Transaction {
+                        mint_url: self.mint_url.clone(),
+                        direction: TransactionDirection::Outgoing,
+                        kind: TransactionKind::LN,
+                        amount: quote_info.amount,
+                        fee: quote_info.fee_reserve,
+                        unit: self.unit.clone(),
+                        ys: proofs.ys()?,
+                        token: invoice,
+                        status: TransactionStatus::Failed,
+                        timestamp: unix_time(),
+                        memo: None,
+                        metadata,
+                    }
+                }
+            }
         };
+        // println!("melt_proofs quote_id {} tx {:?}", quote_id, tx);
 
         ensure_cdk!(
             quote_info.expiry.gt(&unix_time()),
@@ -186,18 +205,31 @@ impl Wallet {
             Some(premint_secrets.blinded_messages()),
         );
 
-        // let melt_response = self.client.post_melt(request).await;
+        // println!("start melt request with timeout...");
+        // tokio::time::sleep(Duration::from_secs(10)).await;
         let melt_response = timeout(Duration::from_secs(15), self.client.post_melt(request)).await;
-
+        // println!("melt request returned from timeout...");
+        // tokio::time::sleep(Duration::from_secs(10)).await;
+        // return Err(Error::Timeout);
         // Handle timeout or HTTP errors
         let melt_response = match melt_response {
             Ok(res) => res, // Result<_, Error>
-            Err(_elapsed) => {
+            Err(_) => {
                 tracing::error!("Could not melt: request timed out after 15s");
 
                 tracing::info!("Checking status of input proofs.");
-                self.reclaim_unspent(proofs).await?;
-                self.localstore.add_transaction(tx.clone()).await?;
+                // if timeout this maybe execute failed
+                let reclaim = timeout(Duration::from_secs(15), self.reclaim_unspent(proofs)).await;
+                self.localstore.add_transaction(tx).await?;
+                match reclaim {
+                    Ok(_) => {
+                        tracing::info!("Reclaimed unspent proofs after melt timeout.");
+                    }
+                    Err(_) => {
+                        tracing::error!("Could not reclaim unspent: request timed out after 15s");
+                        return Err(Error::Timeout);
+                    }
+                }
                 return Err(Error::Timeout);
             }
         };

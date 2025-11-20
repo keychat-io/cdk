@@ -146,7 +146,6 @@ impl Wallet {
     pub async fn check_all_mint_quotes(&self) -> Result<Amount, Error> {
         let mint_quotes = self.localstore.get_mint_quotes().await?;
         let mut total_amount = Amount::ZERO;
-
         for mint_quote in mint_quotes {
             let mint_quote_response = self.mint_quote_state(&mint_quote.id).await?;
 
@@ -258,8 +257,9 @@ impl Wallet {
             request.sign(secret_key)?;
         }
 
+        // println!("requesting mint for quote_id {}", quote_id);
         let mut tx = self
-            .list_pending_transactions()
+            .list_pending_failed_transactions()
             .await?
             .into_iter()
             .find(|t| {
@@ -269,9 +269,11 @@ impl Wallet {
             })
             .ok_or(Error::TransactionNotFound)?;
 
-        // let mint_res = self.client.post_mint(request).await?;
+        // println!("start mint request with timeout...");
+        // tokio::time::sleep(Duration::from_secs(10)).await;
         // Set a timeout for the mint request
         let mint_res = timeout(Duration::from_secs(15), self.client.post_mint(request)).await;
+        // return Err(Error::Timeout);
         let mint_res = match mint_res {
             Ok(Ok(res)) => res,
             Ok(Err(err)) => {

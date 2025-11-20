@@ -167,160 +167,46 @@ impl Wallet {
 
     /// only check failed tx by tx id
     #[instrument(skip(self))]
-    pub async fn check_failed_tx(&self, tx_id: String) -> Result<u64, Error> {
+    pub async fn check_failed_transaction(&self, tx_id: String) -> Result<u64, Error> {
         let mut update_count = 0;
         let tx_id = TransactionId::from_str(&tx_id)?;
         let tx = self.localstore.get_transaction(tx_id.clone()).await?;
         if tx.is_none() {
-            return Ok(0);
+            return Err(Error::TransactionNotFound);
         }
         let mut tx = tx.unwrap();
         if tx.status == TransactionStatus::Success {
-            return Ok(0);
+            return Ok(update_count);
         }
-        if tx.kind == TransactionKind::Cashu && tx.status == TransactionStatus::Failed {
-            // process receive operation
-            if tx.direction == TransactionDirection::Incoming {
-                // due to failed tx and success tx have different id , so need remove old one
-                self.localstore.remove_transaction(tx_id.clone()).await?;
-                // and receive again, if success will update tx status
-                self.receive(&tx.token, ReceiveOptions::default()).await?;
-            } else if tx.direction == TransactionDirection::Outgoing {
-                // this is send operation, need restore proofs. may be partially already pending, need to move them back to unspent
-                self.restore().await?;
-            } else {
-                unreachable!()
-            }
-        } else if tx.kind == TransactionKind::LN && tx.status == TransactionStatus::Failed {
-            // include incoming and outgoning
-            if tx.direction == TransactionDirection::Incoming {
-                // this is mint operation
-                if let Some(quote_id) = tx.metadata.get("quote_id") {
-                    let mint_quote = self.localstore.get_mint_quote(quote_id).await?;
-                    let mint_quote_response = self.mint_quote_state(quote_id).await?;
-
-                    match mint_quote_response.state {
-                        MintQuoteState::Paid => {
-                            // due to failed tx and success tx have different id , so need remove old one
-                            self.localstore.remove_transaction(tx_id.clone()).await?;
-                            // if check failed, will insert a new tx
-                            let res = self.mint(quote_id, SplitTarget::default(), None).await?;
-                            let tx_new = res.1;
-                            // if before execute failed , now success, then update
-                            if tx_new.status == TransactionStatus::Success {
-                                tx.status = tx_new.status;
-                                self.localstore.add_transaction(tx.clone()).await?;
-                                update_count += 1;
-                            }
-                        }
-                        _ => {
-                            if let Some(mint_quote) = mint_quote {
-                                if mint_quote.expiry.le(&unix_time()) {
-                                    tx.status = TransactionStatus::Expired;
-                                    self.localstore.add_transaction(tx.clone()).await?;
-                                    self.localstore.remove_mint_quote(quote_id).await?;
-                                }
-                            }
-                        }
-                    }
-                }
-            } else if tx.direction == TransactionDirection::Outgoing {
-                // this is melt operation
-                if let Some(quote_id) = tx.metadata.get("quote_id") {
-                    let melt_quote = self.localstore.get_melt_quote(quote_id).await?;
-                    let melt_quote_response = self.melt_quote_status(quote_id).await?;
-                    match melt_quote_response.state {
-                        MeltQuoteState::Paid => {
-                            // if failure or success , will cover old tx and insert new one
-                            let _res = self.melt(quote_id).await?;
-                            update_count += 1;
-                        }
-                        _ => {
-                            if let Some(melt_quote) = melt_quote {
-                                if melt_quote.expiry.le(&unix_time()) {
-                                    tx.status = TransactionStatus::Expired;
-                                    self.localstore.add_transaction(tx.clone()).await?;
-                                    self.localstore.remove_melt_quote(quote_id).await?;
-                                }
-                            }
-                        }
-                    }
-                }
-            } else {
-                unreachable!()
-            }
-        } else {
-            unreachable!()
-        }
-        Ok(update_count)
-    }
-
-    /// check tx state by tx id
-    #[instrument(skip(self))]
-    pub async fn check_single_tx_spent_state(&self, tx_id: String) -> Result<u64, Error> {
-        let mut update_count = 0;
-        let tx_id = TransactionId::from_str(&tx_id)?;
-        let tx = self.localstore.get_transaction(tx_id.clone()).await?;
-        if tx.is_none() {
-            return Ok(0);
-        }
-        let mut tx = tx.unwrap();
-        if tx.status == TransactionStatus::Success {
-            return Ok(0);
+        if tx.status != TransactionStatus::Failed {
+            tracing::warn!("Transaction is not failed, current status: {:?}", tx.status);
+            return Ok(update_count);
         }
         if tx.kind == TransactionKind::Cashu {
             // process receive operation
             if tx.direction == TransactionDirection::Incoming {
-                // due to failed tx and success tx have different id , so need remove old one
-                // self.localstore.remove_transaction(tx_id.clone()).await?;
-            } else if tx.direction == TransactionDirection::Outgoing {
-                // this is send operation, need check proofs spent state
-                if tx.status == TransactionStatus::Pending {
-                    let spendable = self
-                        .client
-                        .post_check_state(CheckStateRequest { ys: tx.ys.clone() })
-                        .await?;
-
-                    let states = spendable.states;
-                    let proofs = self
-                        .localstore
-                        .get_proofs(
-                            Some(self.mint_url.clone()),
-                            Some(self.unit.clone()),
-                            Some(vec![State::Pending, State::Reserved, State::PendingSpent]),
-                            None,
-                        )
-                        .await?;
-
-                    let spent_states: HashSet<PublicKey> = states
-                        .clone()
-                        .into_iter()
-                        .filter(|s| s.state.eq(&State::Spent))
-                        .map(|s| s.y)
-                        .collect();
-
-                    // first check spent proofs , then update tx status
-                    let (spent_proofs, _non_spent_proofs): (Vec<ProofInfo>, Vec<ProofInfo>) =
-                        proofs
-                            .clone()
-                            .into_iter()
-                            .partition(|p| spent_states.contains(&p.y));
-
-                    let is_spent = spent_proofs.iter().any(|p| match p.proof.y() {
-                        Ok(y) => tx.ys.contains(&y),
-                        Err(_) => false,
-                    });
-                    if is_spent {
+                // due to failed tx and success tx have different tx_id, so need remove old one
+                self.localstore.remove_transaction(tx_id.clone()).await?;
+                // and receive again, if success will update tx status
+                let re = self.receive(&tx.token, ReceiveOptions::default()).await;
+                match re {
+                    Ok(_tx) => {
+                        // if before execute failed , now success, then update
                         update_count += 1;
-                        tx.status = TransactionStatus::Success;
-                        self.localstore.add_transaction(tx.clone()).await?;
-                        // this is will delete spent proofs in db
-                        // after update tx , then can del proof which spent
-                        let spent_ys: Vec<PublicKey> =
-                            spent_proofs.into_iter().map(|p| p.y).collect();
-                        self.localstore.update_proofs(vec![], spent_ys).await?;
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to receive tokens again: {:?}", e);
+                        // if sender's token is invalid, then still failed
+                        // just like proofs are pending error, so need sender execute check_proofs_from_mint
+                        // if the sender also the receiver
+                        self.check_proofs_from_mint().await?;
+                        // need to restore proofs
+                        self.restore().await?;
                     }
                 }
+            } else if tx.direction == TransactionDirection::Outgoing {
+                // this is send operation, need restore proofs. may be partially already pending, need to move them back to unspent
+                self.restore().await?;
             } else {
                 unreachable!()
             }
@@ -333,19 +219,46 @@ impl Wallet {
                     let mint_quote_response = self.mint_quote_state(quote_id).await?;
 
                     match mint_quote_response.state {
-                        MintQuoteState::Paid => {
-                            // due to failed tx and success tx have different id , so need remove old one
-                            self.localstore.remove_transaction(tx_id.clone()).await?;
-                            // if check failed, will insert a new tx
-                            let res = self.mint(quote_id, SplitTarget::default(), None).await?;
-                            let tx_new = res.1;
-                            // if before execute failed , now success, then update
-                            if tx.status == TransactionStatus::Failed
-                                && tx_new.status == TransactionStatus::Success
-                            {
-                                tx.status = tx_new.status;
-                                self.localstore.add_transaction(tx.clone()).await?;
-                                update_count += 1;
+                        MintQuoteState::Paid | MintQuoteState::Issued => {
+                            let res = self.mint(quote_id, SplitTarget::default(), None).await;
+                            match res {
+                                Ok(res) => {
+                                    let tx_new = res.1;
+                                    // if before execute failed, now success, then update
+                                    if tx_new.status == TransactionStatus::Success {
+                                        tx.status = tx_new.status;
+                                        self.localstore.add_transaction(tx.clone()).await?;
+                                        update_count += 1;
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to mint tokens again: {:?}", e);
+                                    // if timeout again, then still failed
+                                    if e.to_string().contains("Http request timed out") {
+                                        return Err(Error::Custom(
+                                            "Check transaction of mint timeout again".to_string(),
+                                        ));
+                                    }
+                                    // need to restore proofs
+                                    let re = self.restore().await;
+                                    // println!("restore result is {:?}", re);
+                                    match re {
+                                        Ok(_) => {
+                                            tracing::info!("Proofs restored successfully");
+                                            tx.status = TransactionStatus::Success;
+                                            self.localstore.add_transaction(tx.clone()).await?;
+                                            self.localstore.remove_mint_quote(quote_id).await?;
+                                            update_count += 1;
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("Failed to restore proofs: {:?}", e);
+                                            return Err(Error::Custom(
+                                                "Check transaction of restore proofs failed"
+                                                    .to_string(),
+                                            ));
+                                        }
+                                    }
+                                }
                             }
                         }
                         _ => {
@@ -353,29 +266,58 @@ impl Wallet {
                                 if mint_quote.expiry.le(&unix_time()) {
                                     tx.status = TransactionStatus::Expired;
                                     self.localstore.add_transaction(tx.clone()).await?;
-                                    self.localstore.remove_mint_quote(quote_id).await?;
+                                    // self.localstore.remove_mint_quote(quote_id).await?;
                                 }
                             }
                         }
                     }
                 }
             } else if tx.direction == TransactionDirection::Outgoing {
-                // this is melt operation
+                // this is melt operation, but this maybe not happen
                 if let Some(quote_id) = tx.metadata.get("quote_id") {
                     let melt_quote = self.localstore.get_melt_quote(quote_id).await?;
                     let melt_quote_response = self.melt_quote_status(quote_id).await?;
+                    // println!("melt_quote_response state is {:?}", melt_quote_response.state);
                     match melt_quote_response.state {
-                        MeltQuoteState::Paid => {
+                        MeltQuoteState::Unpaid => {
                             // if failure or success , will cover old tx and insert new one
-                            let _res = self.melt(quote_id).await?;
-                            update_count += 1;
+                            let res = self.melt(quote_id).await;
+                            match res {
+                                Ok(_res) => {
+                                    update_count += 1;
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to melt tokens again: {:?}", e);
+                                    // need to restore proofs
+                                    let re = self.restore().await;
+                                    match re {
+                                        Ok(_) => {
+                                            tracing::info!("Proofs restored successfully");
+                                            tx.status = TransactionStatus::Success;
+                                            self.localstore.add_transaction(tx.clone()).await?;
+                                            // self.localstore.remove_melt_quote(quote_id).await?;
+                                            update_count += 1;
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("Failed to restore proofs: {:?}", e);
+                                            return Err(Error::Custom(
+                                                "Check transaction of restore proofs failed"
+                                                    .to_string(),
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        MeltQuoteState::Paid => {
+                            return Err(Error::Custom("The invoice has already paid".to_string()));
                         }
                         _ => {
                             if let Some(melt_quote) = melt_quote {
                                 if melt_quote.expiry.le(&unix_time()) {
                                     tx.status = TransactionStatus::Expired;
                                     self.localstore.add_transaction(tx.clone()).await?;
-                                    self.localstore.remove_melt_quote(quote_id).await?;
+                                    // self.localstore.remove_melt_quote(quote_id).await?;
                                 }
                             }
                         }
@@ -390,9 +332,161 @@ impl Wallet {
         Ok(update_count)
     }
 
+    /// check tx state by tx id, only for pending tx
+    #[instrument(skip(self))]
+    pub async fn check_pending_transaction_state(
+        &self,
+        tx_id: String,
+    ) -> Result<Transaction, Error> {
+        let tx_id = TransactionId::from_str(&tx_id)?;
+        let tx = self.localstore.get_transaction(tx_id.clone()).await?;
+        if tx.is_none() {
+            return Err(Error::TransactionNotFound);
+        }
+        let mut tx = tx.unwrap();
+        if tx.status == TransactionStatus::Success {
+            tracing::info!("Transaction already successful");
+            return Ok(tx);
+        }
+        if tx.status != TransactionStatus::Pending {
+            tracing::warn!(
+                "Transaction is not pending, current status: {:?}",
+                tx.status
+            );
+            return Ok(tx);
+        }
+        if tx.kind == TransactionKind::Cashu {
+            // process receive operation
+            if tx.direction == TransactionDirection::Incoming {
+                // due to receive operation, only have success and failed status, so this not process
+            } else if tx.direction == TransactionDirection::Outgoing {
+                // this is send operation, need check proofs spent state
+                let spendable = self
+                    .client
+                    .post_check_state(CheckStateRequest { ys: tx.ys.clone() })
+                    .await?;
+
+                let states = spendable.states;
+                let proofs = self
+                    .localstore
+                    .get_proofs(
+                        Some(self.mint_url.clone()),
+                        Some(self.unit.clone()),
+                        Some(vec![State::Pending, State::Reserved, State::PendingSpent]),
+                        None,
+                    )
+                    .await?;
+
+                let spent_states: HashSet<PublicKey> = states
+                    .clone()
+                    .into_iter()
+                    .filter(|s| s.state.eq(&State::Spent))
+                    .map(|s| s.y)
+                    .collect();
+
+                // first check spent proofs , then update tx status
+                let (spent_proofs, _non_spent_proofs): (Vec<ProofInfo>, Vec<ProofInfo>) = proofs
+                    .clone()
+                    .into_iter()
+                    .partition(|p| spent_states.contains(&p.y));
+
+                let is_spent = spent_proofs.iter().any(|p| match p.proof.y() {
+                    Ok(y) => tx.ys.contains(&y),
+                    Err(_) => false,
+                });
+                if is_spent {
+                    tx.status = TransactionStatus::Success;
+                    self.localstore.add_transaction(tx.clone()).await?;
+                    // this is will delete spent proofs in db
+                    // after update tx , then can del proof which spent
+                    let spent_ys: Vec<PublicKey> = spent_proofs.into_iter().map(|p| p.y).collect();
+                    self.localstore.update_proofs(vec![], spent_ys).await?;
+                }
+            } else {
+                unreachable!()
+            }
+        } else if tx.kind == TransactionKind::LN {
+            let invoice: Bolt11Invoice = tx.token.parse()?;
+            if invoice.is_expired() {
+                tx.status = TransactionStatus::Expired;
+                self.localstore.add_transaction(tx.clone()).await?;
+                return Ok(tx);
+            }
+            // include incoming and outgoning
+            if tx.direction == TransactionDirection::Incoming {
+                // this is mint operation
+                if let Some(quote_id) = tx.metadata.get("quote_id") {
+                    let mint_quote = self.localstore.get_mint_quote(quote_id).await?;
+                    let mint_quote_response = self.mint_quote_state(quote_id).await?;
+                    // println!("mint_quote_response state is {:?}", mint_quote_response);
+                    match mint_quote_response.state {
+                        MintQuoteState::Paid => {
+                            // due to failed tx and success tx have different id , so need remove old one
+                            // self.localstore.remove_transaction(tx_id.clone()).await?;
+                            // if check failed, will insert a new tx
+                            let res = self.mint(quote_id, SplitTarget::default(), None).await?;
+                            let tx_new = res.1;
+                            // if before execute failed , now success, then update
+                            if tx_new.status == TransactionStatus::Success {
+                                tx.status = tx_new.status;
+                                self.localstore.add_transaction(tx.clone()).await?;
+                            }
+                        }
+                        // user local have alreay get the proofs or mint have already issued the tokens
+                        MintQuoteState::Issued => {
+                            tracing::warn!("mint_quote_response state is Issued");
+                            let res = self.mint(quote_id, SplitTarget::default(), None).await?;
+                            let tx_new = res.1;
+                            // if before execute failed , now success, then update
+                            if tx_new.status == TransactionStatus::Success {
+                                tx.status = tx_new.status;
+                                self.localstore.add_transaction(tx.clone()).await?;
+                            }
+                        }
+                        _ => {
+                            if let Some(mint_quote) = mint_quote {
+                                if mint_quote.expiry.le(&unix_time()) {
+                                    tx.status = TransactionStatus::Expired;
+                                    self.localstore.add_transaction(tx.clone()).await?;
+                                    // self.localstore.remove_mint_quote(quote_id).await?;
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if tx.direction == TransactionDirection::Outgoing {
+                // this is melt operation
+                if let Some(quote_id) = tx.metadata.get("quote_id") {
+                    let melt_quote = self.localstore.get_melt_quote(quote_id).await?;
+                    let melt_quote_response = self.melt_quote_status(quote_id).await?;
+                    match melt_quote_response.state {
+                        MeltQuoteState::Unpaid => {
+                            // if failure or success , will cover old tx and insert new one
+                            let _res = self.melt(quote_id).await?;
+                        }
+                        _ => {
+                            if let Some(melt_quote) = melt_quote {
+                                if melt_quote.expiry.le(&unix_time()) {
+                                    tx.status = TransactionStatus::Expired;
+                                    self.localstore.add_transaction(tx.clone()).await?;
+                                    // self.localstore.remove_melt_quote(quote_id).await?;
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                unreachable!()
+            }
+        } else {
+            unreachable!()
+        }
+        Ok(tx)
+    }
+
     /// check
     #[instrument(skip(self))]
-    pub async fn check_proofs_tx_spent_state(&self) -> Result<(u64, u64), Error> {
+    pub async fn check_pending_transactions_state(&self) -> Result<(u64, u64), Error> {
         let mut update_count = 0;
         let pending_txs = self.list_pending_transactions().await?;
         let mut cushs: BTreeMap<String, Vec<Transaction>> = BTreeMap::new();
@@ -438,7 +532,7 @@ impl Wallet {
                                 if mint_quote.expiry.le(&unix_time()) {
                                     tx.status = TransactionStatus::Expired;
                                     self.localstore.add_transaction(tx.clone()).await?;
-                                    self.localstore.remove_mint_quote(quote_id).await?;
+                                    // self.localstore.remove_mint_quote(quote_id).await?;
                                 }
                             }
                         }

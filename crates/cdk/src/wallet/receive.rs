@@ -172,6 +172,9 @@ impl Wallet {
             Ok(Ok(res)) => res,
             Ok(Err(err)) => {
                 tracing::error!("post_swap failed: {}", err);
+                if err.to_string().contains("Token Already Spent") {
+                    return Err(err);
+                }
                 self.localstore.add_transaction(tx.clone()).await?;
                 return Err(err);
             }

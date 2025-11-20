@@ -353,7 +353,6 @@ impl MultiMintWallet {
                 let wallet = wallets
                     .get(&wallet_key)
                     .ok_or(Error::UnknownWallet(wallet_key.clone()))?;
-
                 let amount = wallet.check_all_mint_quotes().await?;
                 amount_minted.insert(wallet.unit.clone(), amount);
             }

@@ -49,7 +49,7 @@ impl Wallet {
         Ok(transactions)
     }
 
-    /// list pending transactions with kind
+    /// list pending transactions with status
     pub async fn list_pending_transactions(&self) -> Result<Vec<Transaction>, Error> {
         let all_txs = self.list_transactions(None).await?;
         // let all_pending_proofs = self.get_all_pending_proofs().await?;
@@ -69,6 +69,22 @@ impl Wallet {
             .filter(|tx| tx.status == TransactionStatus::Pending)
             .collect();
         Ok(pending_txs)
+    }
+
+    /// list pending failed transactions with status
+    pub async fn list_pending_failed_transactions(&self) -> Result<Vec<Transaction>, Error> {
+        let all_txs = self.list_transactions(None).await?;
+
+        let pending_or_failed_txs = all_txs
+            .into_iter()
+            .filter(|tx| {
+                matches!(
+                    tx.status,
+                    TransactionStatus::Pending | TransactionStatus::Failed
+                )
+            })
+            .collect();
+        Ok(pending_or_failed_txs)
     }
 
     /// Get transaction by ID
