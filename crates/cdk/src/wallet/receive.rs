@@ -7,7 +7,7 @@ use bitcoin::hashes::sha256::Hash as Sha256Hash;
 use bitcoin::hashes::Hash;
 use bitcoin::XOnlyPublicKey;
 use cdk_common::util::unix_time;
-use cdk_common::wallet::{Transaction, TransactionDirection, TransactionKind};
+use cdk_common::wallet::{Transaction, TransactionDirection, TransactionKind, TransactionStatus};
 use tracing::instrument;
 
 use crate::amount::SplitTarget;
@@ -162,7 +162,6 @@ impl Wallet {
         }
 
         // if this errors here, the pending proofs will be cleaned up in the swap cancellation process
-        // let swap_response = self.client.post_swap(pre_swap.swap_request).await;
         let swap_response = timeout(
             Duration::from_secs(15),
             self.client.post_swap(pre_swap.swap_request),
@@ -173,6 +172,8 @@ impl Wallet {
             Ok(Err(err)) => {
                 tracing::error!("post_swap failed: {}", err);
                 if err.to_string().contains("Token Already Spent") {
+                    tx.status = TransactionStatus::Success;
+                    self.localstore.add_transaction(tx.clone()).await?;
                     return Err(err);
                 }
                 self.localstore.add_transaction(tx.clone()).await?;

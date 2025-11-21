@@ -167,7 +167,7 @@ impl Wallet {
 
     /// only check failed tx by tx id
     #[instrument(skip(self))]
-    pub async fn check_failed_transaction(&self, tx_id: String) -> Result<u64, Error> {
+    pub async fn check_failed_transaction(&self, tx_id: String) -> Result<Transaction, Error> {
         let mut update_count = 0;
         let tx_id = TransactionId::from_str(&tx_id)?;
         let tx = self.localstore.get_transaction(tx_id.clone()).await?;
@@ -176,26 +176,39 @@ impl Wallet {
         }
         let mut tx = tx.unwrap();
         if tx.status == TransactionStatus::Success {
-            return Ok(update_count);
+            return Ok(tx);
         }
         if tx.status != TransactionStatus::Failed {
             tracing::warn!("Transaction is not failed, current status: {:?}", tx.status);
-            return Ok(update_count);
+            return Ok(tx);
         }
         if tx.kind == TransactionKind::Cashu {
             // process receive operation
             if tx.direction == TransactionDirection::Incoming {
-                // due to failed tx and success tx have different tx_id, so need remove old one
-                self.localstore.remove_transaction(tx_id.clone()).await?;
                 // and receive again, if success will update tx status
                 let re = self.receive(&tx.token, ReceiveOptions::default()).await;
                 match re {
                     Ok(_tx) => {
+                        // due to failed tx and success tx have different tx_id, only success need remove old one
+                        self.localstore.remove_transaction(tx_id.clone()).await?;
                         // if before execute failed , now success, then update
                         update_count += 1;
                     }
                     Err(e) => {
                         tracing::error!("Failed to receive tokens again: {:?}", e);
+                        if e.to_string().contains("Http request timed out") {
+                            return Err(Error::Custom(
+                                "Check transaction of receive error timeout again".to_string(),
+                            ));
+                        }
+                        if e.to_string().contains("Token Already Spent") {
+                            tx.status = TransactionStatus::Success;
+                            self.localstore.add_transaction(tx.clone()).await?;
+                            return Err(Error::Custom(
+                                "Check transaction of receive error Token Already Spent"
+                                    .to_string(),
+                            ));
+                        }
                         // if sender's token is invalid, then still failed
                         // just like proofs are pending error, so need sender execute check_proofs_from_mint
                         // if the sender also the receiver
@@ -206,7 +219,51 @@ impl Wallet {
                 }
             } else if tx.direction == TransactionDirection::Outgoing {
                 // this is send operation, need restore proofs. may be partially already pending, need to move them back to unspent
-                self.restore().await?;
+                let re = self.restore().await;
+                match re {
+                    Ok(_) => {
+                        tracing::info!("Proofs restored successfully");
+                        // if need resend? send to who?
+                        // match self.prepare_send(tx.amount, SendOptions::default()).await {
+                        //     Ok(prepared) => {
+                        //         match self.send(prepared, None).await {
+                        //             Ok(new_tx) => {
+                        //                 if new_tx.status == TransactionStatus::Success {
+                        //                     // remove old tx
+                        //                     self.localstore.remove_transaction(tx_id.clone()).await?;
+                        //                     update_count += 1;
+                        //                 } else {
+                        //                     tracing::warn!(
+                        //                         "Resend after restore did not succeed, status={:?}",
+                        //                         new_tx.status
+                        //                     );
+                        //                 }
+                        //             }
+                        //             Err(e) => {
+                        //                 tracing::error!("Resend after restore failed: {:?}", e);
+                        //                 return Err(Error::Custom(
+                        //                     "Check transaction of prepare_send failed".to_string(),
+                        //                 ));
+                        //             }
+                        //         }
+                        //     }
+                        //     Err(e) => {
+                        //         tracing::error!("prepare_send after restore failed: {:?}", e);
+                        //         return Err(Error::Custom(
+                        //             "Check transaction of send failed".to_string(),
+                        //         ));
+                        //     }
+                        // }
+                        tx.status = TransactionStatus::Success;
+                        self.localstore.add_transaction(tx.clone()).await?;
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to restore proofs: {:?}", e);
+                        return Err(Error::Custom(
+                            "Check transaction of restore proofs failed".to_string(),
+                        ));
+                    }
+                }
             } else {
                 unreachable!()
             }
@@ -247,7 +304,7 @@ impl Wallet {
                                             tracing::info!("Proofs restored successfully");
                                             tx.status = TransactionStatus::Success;
                                             self.localstore.add_transaction(tx.clone()).await?;
-                                            self.localstore.remove_mint_quote(quote_id).await?;
+                                            // self.localstore.remove_mint_quote(quote_id).await?;
                                             update_count += 1;
                                         }
                                         Err(e) => {
@@ -288,6 +345,12 @@ impl Wallet {
                                 }
                                 Err(e) => {
                                     tracing::error!("Failed to melt tokens again: {:?}", e);
+                                    // if timeout again, then still failed
+                                    if e.to_string().contains("Http request timed out") {
+                                        return Err(Error::Custom(
+                                            "Check transaction of melt timeout again".to_string(),
+                                        ));
+                                    }
                                     // need to restore proofs
                                     let re = self.restore().await;
                                     match re {
@@ -310,6 +373,8 @@ impl Wallet {
                             }
                         }
                         MeltQuoteState::Paid => {
+                            tx.status = TransactionStatus::Success;
+                            self.localstore.add_transaction(tx.clone()).await?;
                             return Err(Error::Custom("The invoice has already paid".to_string()));
                         }
                         _ => {
@@ -329,7 +394,7 @@ impl Wallet {
         } else {
             unreachable!()
         }
-        Ok(update_count)
+        Ok(tx)
     }
 
     /// check tx state by tx id, only for pending tx
@@ -359,6 +424,7 @@ impl Wallet {
             // process receive operation
             if tx.direction == TransactionDirection::Incoming {
                 // due to receive operation, only have success and failed status, so this not process
+                return Ok(tx);
             } else if tx.direction == TransactionDirection::Outgoing {
                 // this is send operation, need check proofs spent state
                 let spendable = self
@@ -383,6 +449,7 @@ impl Wallet {
                     .filter(|s| s.state.eq(&State::Spent))
                     .map(|s| s.y)
                     .collect();
+
 
                 // first check spent proofs , then update tx status
                 let (spent_proofs, _non_spent_proofs): (Vec<ProofInfo>, Vec<ProofInfo>) = proofs
@@ -420,7 +487,7 @@ impl Wallet {
                     let mint_quote_response = self.mint_quote_state(quote_id).await?;
                     // println!("mint_quote_response state is {:?}", mint_quote_response);
                     match mint_quote_response.state {
-                        MintQuoteState::Paid => {
+                        MintQuoteState::Paid | MintQuoteState::Issued => {
                             // due to failed tx and success tx have different id , so need remove old one
                             // self.localstore.remove_transaction(tx_id.clone()).await?;
                             // if check failed, will insert a new tx
@@ -433,16 +500,18 @@ impl Wallet {
                             }
                         }
                         // user local have alreay get the proofs or mint have already issued the tokens
-                        MintQuoteState::Issued => {
-                            tracing::warn!("mint_quote_response state is Issued");
-                            let res = self.mint(quote_id, SplitTarget::default(), None).await?;
-                            let tx_new = res.1;
-                            // if before execute failed , now success, then update
-                            if tx_new.status == TransactionStatus::Success {
-                                tx.status = tx_new.status;
-                                self.localstore.add_transaction(tx.clone()).await?;
-                            }
-                        }
+                        // but in check pending, this will not happen, if Paid, then will do above, if failure will do check failed
+                        // MintQuoteState::Issued => {
+                        //     // if state is Issued, then just mint again to get the tokens?
+                        //     tracing::warn!("mint_quote_response state is Issued");
+                        //     let res = self.mint(quote_id, SplitTarget::default(), None).await?;
+                        //     let tx_new = res.1;
+                        //     // if before execute failed , now success, then update
+                        //     if tx_new.status == TransactionStatus::Success {
+                        //         tx.status = tx_new.status;
+                        //         self.localstore.add_transaction(tx.clone()).await?;
+                        //     }
+                        // }
                         _ => {
                             if let Some(mint_quote) = mint_quote {
                                 if mint_quote.expiry.le(&unix_time()) {
