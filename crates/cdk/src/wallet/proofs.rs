@@ -450,7 +450,6 @@ impl Wallet {
                     .map(|s| s.y)
                     .collect();
 
-
                 // first check spent proofs , then update tx status
                 let (spent_proofs, _non_spent_proofs): (Vec<ProofInfo>, Vec<ProofInfo>) = proofs
                     .clone()

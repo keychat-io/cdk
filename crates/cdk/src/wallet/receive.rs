@@ -186,6 +186,17 @@ impl Wallet {
             }
         };
 
+        // first check if this send and receive byself
+        let mut tx_db = self.localstore.get_transaction(tx.id().clone()).await?;
+        if let Some(tx_db) = &mut tx_db {
+            tracing::info!(
+                "Receive by self detected, updating existing transaction {:?}",
+                tx_db.id()
+            );
+            tx_db.status = TransactionStatus::Success;
+            self.localstore.add_transaction(tx_db.clone()).await?;
+        }
+
         // Proof to keep
         let recv_proofs = construct_proofs(
             swap_response.signatures,
