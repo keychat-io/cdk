@@ -264,6 +264,30 @@ impl MultiMintWallet {
         Ok(transactions)
     }
 
+    /// List failed transactions with kind
+    #[instrument(skip(self))]
+    pub async fn list_failed_transactions_with_kind(
+        &self,
+        kind: &[TransactionKind],
+        direction: Option<TransactionDirection>,
+    ) -> Result<Vec<Transaction>, Error> {
+        let mut transactions = Vec::new();
+
+        for (_, wallet) in self.wallets.read().await.iter() {
+            let wallet_transactions = wallet.list_failed_transactions().await?;
+            for t in wallet_transactions {
+                if kind.contains(&t.kind) {
+                    transactions.push(t);
+                }
+            }
+            // transactions.extend(wallet_transactions);
+        }
+
+        transactions.sort();
+
+        Ok(transactions)
+    }
+
     /// remove transactions by timestamp
     #[instrument(skip(self))]
     pub async fn remove_transactions(&self, unix_timestamp_le: u64) -> Result<(), Error> {

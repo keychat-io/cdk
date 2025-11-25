@@ -87,6 +87,17 @@ impl Wallet {
         Ok(pending_or_failed_txs)
     }
 
+    /// list failed transactions with status
+    pub async fn list_failed_transactions(&self) -> Result<Vec<Transaction>, Error> {
+        let all_txs = self.list_transactions(None).await?;
+
+        let failed_txs = all_txs
+            .into_iter()
+            .filter(|tx| tx.status == TransactionStatus::Failed)
+            .collect();
+        Ok(failed_txs)
+    }
+
     /// Get transaction by ID
     pub async fn remove_transactions(&self, unix_timestamp_le: u64) -> Result<(), Error> {
         self.localstore
