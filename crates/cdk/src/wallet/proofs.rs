@@ -168,7 +168,6 @@ impl Wallet {
     /// only check failed tx by tx id
     #[instrument(skip(self))]
     pub async fn check_failed_transaction(&self, tx_id: String) -> Result<Transaction, Error> {
-        let mut update_count = 0;
         let tx_id = TransactionId::from_str(&tx_id)?;
         let tx = self.localstore.get_transaction(tx_id.clone()).await?;
         if tx.is_none() {
@@ -192,7 +191,6 @@ impl Wallet {
                         // due to failed tx and success tx have different tx_id, only success need remove old one
                         self.localstore.remove_transaction(tx_id.clone()).await?;
                         // if before execute failed , now success, then update
-                        update_count += 1;
                     }
                     Err(e) => {
                         tracing::error!("Failed to receive tokens again: {:?}", e);
@@ -285,7 +283,6 @@ impl Wallet {
                                     if tx_new.status == TransactionStatus::Success {
                                         tx.status = tx_new.status;
                                         self.localstore.add_transaction(tx.clone()).await?;
-                                        update_count += 1;
                                     }
                                 }
                                 Err(e) => {
@@ -305,7 +302,6 @@ impl Wallet {
                                             tx.status = TransactionStatus::Success;
                                             self.localstore.add_transaction(tx.clone()).await?;
                                             // self.localstore.remove_mint_quote(quote_id).await?;
-                                            update_count += 1;
                                         }
                                         Err(e) => {
                                             tracing::error!("Failed to restore proofs: {:?}", e);
@@ -340,9 +336,7 @@ impl Wallet {
                             // if failure or success , will cover old tx and insert new one
                             let res = self.melt(quote_id).await;
                             match res {
-                                Ok(_res) => {
-                                    update_count += 1;
-                                }
+                                Ok(_res) => {}
                                 Err(e) => {
                                     tracing::error!("Failed to melt tokens again: {:?}", e);
                                     // if timeout again, then still failed
@@ -359,7 +353,6 @@ impl Wallet {
                                             tx.status = TransactionStatus::Success;
                                             self.localstore.add_transaction(tx.clone()).await?;
                                             // self.localstore.remove_melt_quote(quote_id).await?;
-                                            update_count += 1;
                                         }
                                         Err(e) => {
                                             tracing::error!("Failed to restore proofs: {:?}", e);

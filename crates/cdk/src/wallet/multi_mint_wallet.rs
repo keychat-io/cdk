@@ -217,6 +217,24 @@ impl MultiMintWallet {
         Ok(transactions)
     }
 
+    /// List transactions
+    #[instrument(skip(self))]
+    pub async fn list_pending_failed_transactions(
+        &self,
+        direction: Option<TransactionDirection>,
+    ) -> Result<Vec<Transaction>, Error> {
+        let mut transactions = Vec::new();
+
+        for (_, wallet) in self.wallets.read().await.iter() {
+            let wallet_transactions = wallet.list_pending_failed_transactions().await?;
+            transactions.extend(wallet_transactions);
+        }
+
+        transactions.sort();
+
+        Ok(transactions)
+    }
+
     /// List transactions with kind and offset
     #[instrument(skip(self))]
     pub async fn list_transactions_with_kind_offset(
@@ -446,7 +464,12 @@ impl MultiMintWallet {
         {
             Some(keysets_info) => keysets_info,
             // Hit the keysets endpoint if we don't have the keysets for this Mint
-            None => wallet.get_mint_keysets().await?,
+            None => {
+                // if wallet id removed before(the counter is changed), so restore first
+                tracing::warn!("restoring wallet before getting keysets");
+                wallet.restore().await?;
+                wallet.get_mint_keysets().await?
+            },
         };
         let proofs = token_data.proofs(&keysets_info)?;
         wallet

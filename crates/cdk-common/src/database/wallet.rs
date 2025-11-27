@@ -14,7 +14,7 @@ use crate::nuts::{
 };
 use crate::wallet::{
     self, MintQuote as WalletMintQuote, Transaction, TransactionDirection, TransactionId,
-    TransactionKind,
+    TransactionKind, TransactionStatus,
 };
 
 /// Wallet Database trait
@@ -116,6 +116,15 @@ pub trait Database: Debug {
         mint_url: Option<MintUrl>,
         direction: Option<TransactionDirection>,
         unit: Option<CurrencyUnit>,
+    ) -> Result<Vec<Transaction>, Self::Err>;
+
+    /// List transactions with status from storage
+    async fn list_transactions_with_status(
+        &self,
+        mint_url: Option<MintUrl>,
+        direction: Option<TransactionDirection>,
+        unit: Option<CurrencyUnit>,
+        status: TransactionStatus,
     ) -> Result<Vec<Transaction>, Self::Err>;
 
     /// List transactions with kind and offset from storage

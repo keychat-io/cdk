@@ -770,6 +770,40 @@ impl WalletDatabase for WalletRedbDatabase {
     }
 
     #[instrument(skip(self))]
+    async fn list_transactions_with_status(
+        &self,
+        mint_url: Option<MintUrl>,
+        direction: Option<TransactionDirection>,
+        unit: Option<CurrencyUnit>,
+        status: wallet::TransactionStatus,
+    ) -> Result<Vec<Transaction>, Self::Err> {
+        let read_txn = self.db.begin_read().map_err(Error::from)?;
+
+        let table = read_txn
+            .open_table(TRANSACTIONS_TABLE)
+            .map_err(Error::from)?;
+
+        let transactions: Vec<Transaction> = table
+            .iter()
+            .map_err(Error::from)?
+            .flatten()
+            .filter_map(|(_k, v)| {
+                let mut transaction = None;
+
+                if let Ok(tx) = serde_json::from_str::<Transaction>(v.value()) {
+                    if tx.matches_conditions(&mint_url, &direction, &unit) && tx.status == status {
+                        transaction = Some(tx)
+                    }
+                }
+
+                transaction
+            })
+            .collect();
+
+        Ok(transactions)
+    }
+
+    #[instrument(skip(self))]
     async fn list_transactions_with_kind_offset(
         &self,
         offset: usize,

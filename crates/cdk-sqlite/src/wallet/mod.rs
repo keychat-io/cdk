@@ -890,6 +890,49 @@ ON CONFLICT(id) DO UPDATE SET
     }
 
     #[instrument(skip(self))]
+    async fn list_transactions_with_status(
+        &self,
+        mint_url: Option<MintUrl>,
+        direction: Option<TransactionDirection>,
+        unit: Option<CurrencyUnit>,
+        status: TransactionStatus,
+    ) -> Result<Vec<Transaction>, Self::Err> {
+        Ok(Statement::new(
+            r#"
+            SELECT
+                mint_url,
+                direction,
+                kind,
+                unit,
+                amount,
+                fee,
+                ys,
+                token,
+                status,
+                timestamp,
+                memo,
+                metadata
+            FROM
+                transactions where status = :status
+            "#,
+        )
+        .bind(":status", status.to_string())
+        .fetch_all(&self.pool.get().map_err(Error::Pool)?)
+        .map_err(Error::Sqlite)?
+        .into_iter()
+        .filter_map(|row| {
+            // TODO: Avoid a table scan by passing the heavy lifting of checking to the DB engine
+            let transaction = sqlite_row_to_transaction(row).ok()?;
+            if transaction.matches_conditions(&mint_url, &direction, &unit) {
+                Some(transaction)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>())
+    }
+
+    #[instrument(skip(self))]
     async fn list_transactions_with_kind_offset(
         &self,
         offset: usize,

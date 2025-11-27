@@ -24,6 +24,27 @@ impl Wallet {
         Ok(transactions)
     }
 
+    /// List transactions with status
+    pub async fn list_transactions_with_status(
+        &self,
+        direction: Option<TransactionDirection>,
+        status: TransactionStatus,
+    ) -> Result<Vec<Transaction>, Error> {
+        let mut transactions = self
+            .localstore
+            .list_transactions_with_status(
+                Some(self.mint_url.clone()),
+                direction,
+                Some(self.unit.clone()),
+                status,
+            )
+            .await?;
+
+        transactions.sort();
+
+        Ok(transactions)
+    }
+
     /// list transactions with kind and offset
     pub async fn list_transactions_with_kind_offset(
         &self,
@@ -51,50 +72,27 @@ impl Wallet {
 
     /// list pending transactions with status
     pub async fn list_pending_transactions(&self) -> Result<Vec<Transaction>, Error> {
-        let all_txs = self.list_transactions(None).await?;
-        // let all_pending_proofs = self.get_all_pending_proofs().await?;
-        // println!("all_pending_proofs {:?}", all_pending_proofs);
-        // find all pending_txs
-        // let pending_txs = all_txs
-        //     .into_iter()
-        //     .filter(|tx| {
-        //         all_pending_proofs.iter().any(|p| match p.y() {
-        //             Ok(y) => tx.ys.contains(&y),
-        //             Err(_) => false,
-        //         })
-        //     })
-        //     .collect::<Vec<_>>();
-        let pending_txs = all_txs
-            .into_iter()
-            .filter(|tx| tx.status == TransactionStatus::Pending)
-            .collect();
+        let pending_txs = self
+            .list_transactions_with_status(None, TransactionStatus::Pending)
+            .await?;
         Ok(pending_txs)
     }
 
     /// list pending failed transactions with status
     pub async fn list_pending_failed_transactions(&self) -> Result<Vec<Transaction>, Error> {
-        let all_txs = self.list_transactions(None).await?;
-
-        let pending_or_failed_txs = all_txs
-            .into_iter()
-            .filter(|tx| {
-                matches!(
-                    tx.status,
-                    TransactionStatus::Pending | TransactionStatus::Failed
-                )
-            })
-            .collect();
+        let pending_txs = self.list_pending_transactions().await?;
+        let failed_txs = self.list_failed_transactions().await?;
+        let mut pending_or_failed_txs = Vec::new();
+        pending_or_failed_txs.extend(pending_txs);
+        pending_or_failed_txs.extend(failed_txs);
         Ok(pending_or_failed_txs)
     }
 
     /// list failed transactions with status
     pub async fn list_failed_transactions(&self) -> Result<Vec<Transaction>, Error> {
-        let all_txs = self.list_transactions(None).await?;
-
-        let failed_txs = all_txs
-            .into_iter()
-            .filter(|tx| tx.status == TransactionStatus::Failed)
-            .collect();
+        let failed_txs = self
+            .list_transactions_with_status(None, TransactionStatus::Failed)
+            .await?;
         Ok(failed_txs)
     }
 
