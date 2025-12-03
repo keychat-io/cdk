@@ -117,6 +117,17 @@ impl Wallet {
         Ok(response)
     }
 
+    /// Melt quote status only, for testing purpose
+    #[instrument(skip(self, quote_id))]
+    pub async fn melt_quote_status_only(
+        &self,
+        quote_id: &str,
+    ) -> Result<MeltQuoteBolt11Response<String>, Error> {
+        let response = self.client.get_melt_quote_status(quote_id).await?;
+
+        Ok(response)
+    }
+
     /// Melt specific proofs
     #[instrument(skip(self, proofs))]
     pub async fn melt_proofs(

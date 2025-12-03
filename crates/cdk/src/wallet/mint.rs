@@ -141,6 +141,18 @@ impl Wallet {
         Ok(response)
     }
 
+    /// Check mint quote status only, for testing purpose
+    #[instrument(skip(self, quote_id))]
+    pub async fn mint_quote_state_test(
+        &self,
+        quote_id: &str,
+    ) -> Result<MintQuoteBolt11Response<String>, Error> {
+        let response = self.client.get_mint_quote_status(quote_id).await?;
+        tracing::debug!("mint_quote_state_test response: {:?}", response);
+
+        Ok(response)
+    }
+
     /// Check status of pending mint quotes
     #[instrument(skip(self))]
     pub async fn check_all_mint_quotes(&self) -> Result<Amount, Error> {

@@ -258,7 +258,21 @@ impl Wallet {
                     Err(e) => {
                         tracing::error!("Failed to restore proofs: {:?}", e);
                         return Err(Error::Custom(
-                            "Check transaction of restore proofs failed".to_string(),
+                            "Check transaction of restore proofs failed for [Outgoing]".to_string(),
+                        ));
+                    }
+                }
+            } else if tx.direction == TransactionDirection::Split {
+                let re = self.restore().await;
+                match re {
+                    Ok(_) => {
+                        tracing::info!("Proofs restored successfully, and delete the tx");
+                        self.localstore.remove_transaction(tx.clone().id()).await?;
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to restore proofs: {:?}", e);
+                        return Err(Error::Custom(
+                            "Check transaction of restore proofs failed for [Split]".to_string(),
                         ));
                     }
                 }
@@ -352,6 +366,7 @@ impl Wallet {
                                             tracing::info!("Proofs restored successfully");
                                             tx.status = TransactionStatus::Success;
                                             self.localstore.add_transaction(tx.clone()).await?;
+                                            // this need delete duplicate tx in database?
                                             // self.localstore.remove_melt_quote(quote_id).await?;
                                         }
                                         Err(e) => {

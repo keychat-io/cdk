@@ -413,6 +413,34 @@ impl MultiMintWallet {
         Ok(amount_minted)
     }
 
+    /// Check all mint quotes for testing purpose
+    /// If quote is paid, wallet will mint
+    #[instrument(skip(self))]
+    pub async fn check_mint_quote_id(
+        &self,
+        quote_id: &str,
+        wallet_key: Option<WalletKey>,
+    ) -> Result<(), Error> {
+        match wallet_key {
+            Some(wallet_key) => {
+                let wallets = self.wallets.read().await;
+                let wallet = wallets
+                    .get(&wallet_key)
+                    .ok_or(Error::UnknownWallet(wallet_key.clone()))?;
+                let re = wallet.mint_quote_state_test(quote_id).await?;
+                tracing::debug!("mint_quote_state_test re {:?}", re);
+            }
+            None => {
+                for (_, wallet) in self.wallets.read().await.iter() {
+                    let re = wallet.mint_quote_state_test(quote_id).await?;
+                    tracing::debug!("mint_quote_state_test re {:?}", re);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Mint a specific quote
     #[instrument(skip(self))]
     pub async fn mint(
@@ -469,7 +497,7 @@ impl MultiMintWallet {
                 tracing::warn!("restoring wallet before getting keysets");
                 wallet.restore().await?;
                 wallet.get_mint_keysets().await?
-            },
+            }
         };
         let proofs = token_data.proofs(&keysets_info)?;
         wallet

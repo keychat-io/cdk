@@ -12,7 +12,28 @@ use crate::{ensure_cdk, Amount, Error, Wallet};
 use cdk_common::wallet::{Transaction, TransactionDirection, TransactionKind};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::time::timeout;
+
 impl Wallet {
+    async fn reclaim_or_record_tx(
+        &self,
+        input_proofs: Proofs,
+        tx: &Transaction,
+    ) -> Result<(), Error> {
+        match self.reclaim_unspent(input_proofs).await {
+            Ok(_) => {
+                tracing::info!("Reclaimed unspent proofs success.");
+                Ok(())
+            }
+            Err(err) => {
+                tracing::error!("Could not reclaim unspent proofs: {}", err);
+                // only reclaim failed then add tx
+                self.localstore.add_transaction(tx.clone()).await?;
+                Err(err)
+            }
+        }
+    }
+
     /// swap with denomination
     #[instrument(skip(self, input_proofs))]
     pub async fn swap_denomination(
@@ -25,13 +46,52 @@ impl Wallet {
         tracing::info!("Swapping denomination");
         let mint_url = &self.mint_url;
         let unit = &self.unit;
+        let token = Token::new(mint_url.clone(), input_proofs.clone(), None, unit.clone());
 
         let pre_swap = self
             .create_swap_denomination(denomination, amount, input_proofs.clone(), include_fees)
             .await?;
         let fee = pre_swap.fee;
 
-        let swap_response = self.client.post_swap(pre_swap.swap_request).await?;
+        let mut tx = Transaction {
+            mint_url: mint_url.clone(),
+            direction: TransactionDirection::Split,
+            kind: TransactionKind::Cashu,
+            amount: 32.into(), // dummy amount for swap txns
+            fee,
+            unit: unit.clone(),
+            ys: input_proofs.ys()?,
+            token: token.to_string(),
+            status: cdk_common::wallet::TransactionStatus::Failed,
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            memo: None,
+            metadata: HashMap::new(),
+        };
+
+        // let swap_response = self.client.post_swap(pre_swap.swap_request).await?;
+        let swap_response = timeout(
+            tokio::time::Duration::from_secs(15),
+            self.client.post_swap(pre_swap.swap_request),
+        )
+        .await;
+
+        let swap_response = match swap_response {
+            Ok(Ok(res)) => res,
+            Ok(Err(err)) => {
+                tracing::error!("post_swap failed: {}", err);
+                // Reclaim unspent proofs
+                self.reclaim_or_record_tx(input_proofs.clone(), &tx).await?;
+                return Err(err);
+            }
+            Err(_) => {
+                tracing::error!("post_swap timed out after 15s");
+                self.reclaim_or_record_tx(input_proofs.clone(), &tx).await?;
+                return Err(Error::Timeout);
+            }
+        };
 
         let active_keyset_id = pre_swap.pre_mint_secrets.keyset_id;
 
@@ -130,29 +190,9 @@ impl Wallet {
             .update_proofs(added_proofs, deleted_ys)
             .await?;
 
-        let token = Token::new(mint_url.clone(), input_proofs.clone(), None, unit.clone());
-
+        tx.status = cdk_common::wallet::TransactionStatus::Success;
         // add to db
-        self.localstore
-            .add_transaction(Transaction {
-                mint_url: mint_url.clone(),
-                direction: TransactionDirection::Split,
-                kind: TransactionKind::Cashu,
-                // amount: amount.unwrap_or(Amount::ZERO),
-                amount: 32.into(), // dummy amount for swap txns
-                fee,
-                unit: unit.clone(),
-                ys: input_proofs.ys()?,
-                token: token.to_string(),
-                status: cdk_common::wallet::TransactionStatus::Success,
-                timestamp: SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-                memo: None,
-                metadata: HashMap::new(),
-            })
-            .await?;
+        self.localstore.add_transaction(tx).await?;
         Ok(send_proofs)
     }
 
