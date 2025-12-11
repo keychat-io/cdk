@@ -18,7 +18,7 @@ impl Wallet {
     async fn reclaim_or_record_tx(
         &self,
         input_proofs: Proofs,
-        tx: &Transaction,
+        tx: Transaction,
     ) -> Result<(), Error> {
         match self.reclaim_unspent(input_proofs).await {
             Ok(_) => {
@@ -28,7 +28,7 @@ impl Wallet {
             Err(err) => {
                 tracing::error!("Could not reclaim unspent proofs: {}", err);
                 // only reclaim failed then add tx
-                self.localstore.add_transaction(tx.clone()).await?;
+                self.localstore.add_transaction(tx).await?;
                 Err(err)
             }
         }
@@ -83,12 +83,14 @@ impl Wallet {
             Ok(Err(err)) => {
                 tracing::error!("post_swap failed: {}", err);
                 // Reclaim unspent proofs
-                self.reclaim_or_record_tx(input_proofs.clone(), &tx).await?;
+                self.reclaim_or_record_tx(input_proofs.clone(), tx.clone())
+                    .await?;
                 return Err(err);
             }
             Err(_) => {
                 tracing::error!("post_swap timed out after 15s");
-                self.reclaim_or_record_tx(input_proofs.clone(), &tx).await?;
+                self.reclaim_or_record_tx(input_proofs.clone(), tx.clone())
+                    .await?;
                 return Err(Error::Timeout);
             }
         };
@@ -221,6 +223,66 @@ impl Wallet {
             .await?;
 
         let swap_response = self.client.post_swap(pre_swap.swap_request).await?;
+
+        // tracing::info!("Swapping");
+        // let mint_url = &self.mint_url;
+        // let unit = &self.unit;
+        // let token = Token::new(mint_url.clone(), input_proofs.clone(), None, unit.clone());
+
+        // let pre_swap = self
+        //     .create_swap(
+        //         amount,
+        //         amount_split_target.clone(),
+        //         input_proofs.clone(),
+        //         spending_conditions.clone(),
+        //         include_fees,
+        //     )
+        //     .await?;
+        // let fee = pre_swap.fee;
+
+        // // let swap_response = self.client.post_swap(pre_swap.swap_request).await?;
+
+        // let tx = Transaction {
+        //     mint_url: mint_url.clone(),
+        //     direction: TransactionDirection::Split,
+        //     kind: TransactionKind::Cashu,
+        //     amount: amount.unwrap_or(0.into()), // dummy amount for swap txns
+        //     fee,
+        //     unit: unit.clone(),
+        //     ys: input_proofs.ys()?,
+        //     token: token.to_string(),
+        //     status: cdk_common::wallet::TransactionStatus::Failed,
+        //     timestamp: SystemTime::now()
+        //         .duration_since(UNIX_EPOCH)
+        //         .unwrap_or_default()
+        //         .as_secs(),
+        //     memo: None,
+        //     metadata: HashMap::new(),
+        // };
+
+        // // let swap_response = self.client.post_swap(pre_swap.swap_request).await?;
+        // let swap_response = timeout(
+        //     tokio::time::Duration::from_secs(15),
+        //     self.client.post_swap(pre_swap.swap_request),
+        // )
+        // .await;
+
+        // let swap_response = match swap_response {
+        //     Ok(Ok(res)) => res,
+        //     Ok(Err(err)) => {
+        //         tracing::error!("post_swap failed: {}", err);
+        //         println!("post_swap failed: {}", err);
+        //         // add tx for failed swap
+        //         self.localstore.add_transaction(tx).await?;
+        //         return Err(err);
+        //     }
+        //     Err(_) => {
+        //         tracing::error!("post_swap timed out after 15s");
+        //         println!("post_swap timed out after 15s");
+        //         self.localstore.add_transaction(tx).await?;
+        //         return Err(Error::Timeout);
+        //     }
+        // };
 
         let active_keyset_id = pre_swap.pre_mint_secrets.keyset_id;
 
