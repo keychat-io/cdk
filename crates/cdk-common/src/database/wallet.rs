@@ -138,6 +138,17 @@ pub trait Database: Debug {
         unit: Option<CurrencyUnit>,
     ) -> Result<Vec<Transaction>, Self::Err>;
 
+    /// List transactions with kind, amount != 1 and offset from storage
+    async fn list_transactions_with_kind_amount_offset(
+        &self,
+        offset: usize,
+        limit: usize,
+        kind: &[TransactionKind],
+        mint_url: Option<MintUrl>,
+        direction: Option<TransactionDirection>,
+        unit: Option<CurrencyUnit>,
+    ) -> Result<Vec<Transaction>, Self::Err>;
+
     /// Remove transaction from storage
     async fn remove_transaction(&self, transaction_id: TransactionId) -> Result<(), Self::Err>;
 

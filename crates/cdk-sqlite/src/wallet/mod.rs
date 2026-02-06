@@ -982,6 +982,57 @@ ON CONFLICT(id) DO UPDATE SET
         .collect::<Vec<_>>())
     }
 
+    // filter out amount == 1
+    #[instrument(skip(self))]
+    async fn list_transactions_with_kind_amount_offset(
+        &self,
+        offset: usize,
+        limit: usize,
+        kinds: &[TransactionKind],
+        mint_url: Option<MintUrl>,
+        direction: Option<TransactionDirection>,
+        unit: Option<CurrencyUnit>,
+    ) -> Result<Vec<Transaction>, Self::Err> {
+        Ok(Statement::new(
+            r#"
+            SELECT
+                mint_url,
+                direction,
+                kind,
+                unit,
+                amount,
+                fee,
+                ys,
+                token,
+                status,
+                timestamp,
+                memo,
+                metadata
+            FROM
+                transactions where amount != 1 and kind IN (:kinds) order by timestamp desc limit :l offset :o
+            "#,
+        )
+        .bind_vec(
+            ":kinds",
+            kinds.iter().map(|k| k.to_string()).collect::<Vec<_>>(),
+        )
+        .bind(":l", limit as i64)
+        .bind(":o", offset as i64)
+        .fetch_all(&self.pool.get().map_err(Error::Pool)?)
+        .map_err(Error::Sqlite)?
+        .into_iter()
+        .filter_map(|row| {
+            // TODO: Avoid a table scan by passing the heavy lifting of checking to the DB engine
+            let transaction = sqlite_row_to_transaction(row).ok()?;
+            if transaction.matches_conditions(&mint_url, &direction, &unit) {
+                Some(transaction)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>())
+    }
+
     #[instrument(skip(self))]
     async fn remove_transaction(&self, transaction_id: TransactionId) -> Result<(), Self::Err> {
         Statement::new(r#"DELETE FROM transactions WHERE id=:id"#)

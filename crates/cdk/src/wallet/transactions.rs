@@ -70,6 +70,31 @@ impl Wallet {
         Ok(transactions)
     }
 
+    /// list transactions with kind and amount!=1 and offset
+    pub async fn list_transactions_with_kind_amount_offset(
+        &self,
+        offset: usize,
+        limit: usize,
+        kind: &[TransactionKind],
+        direction: Option<TransactionDirection>,
+    ) -> Result<Vec<Transaction>, Error> {
+        let mut transactions = self
+            .localstore
+            .list_transactions_with_kind_amount_offset(
+                offset,
+                limit,
+                kind,
+                Some(self.mint_url.clone()),
+                direction,
+                Some(self.unit.clone()),
+            )
+            .await?;
+
+        transactions.sort();
+
+        Ok(transactions)
+    }
+
     /// list pending transactions with status
     pub async fn list_pending_transactions(&self) -> Result<Vec<Transaction>, Error> {
         let pending_txs = self

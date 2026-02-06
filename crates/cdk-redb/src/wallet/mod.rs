@@ -826,6 +826,28 @@ impl WalletDatabase for WalletRedbDatabase {
     }
 
     #[instrument(skip(self))]
+    async fn list_transactions_with_kind_amount_offset(
+        &self,
+        offset: usize,
+        limit: usize,
+        kind: &[TransactionKind],
+        mint_url: Option<MintUrl>,
+        direction: Option<TransactionDirection>,
+        unit: Option<CurrencyUnit>,
+    ) -> Result<Vec<Transaction>, Self::Err> {
+        // TODO: Implement actual logic
+        // For now, return an empty Vec or a basic filter over list_transactions
+        let all = self.list_transactions(mint_url, direction, unit).await?;
+        let filtered: Vec<_> = all
+            .into_iter()
+            .filter(|tx| kind.contains(&tx.kind))
+            .skip(offset)
+            .take(limit)
+            .collect();
+        Ok(filtered)
+    }
+
+    #[instrument(skip(self))]
     async fn remove_transaction(&self, transaction_id: TransactionId) -> Result<(), Self::Err> {
         let write_txn = self.db.begin_write().map_err(Error::from)?;
 
