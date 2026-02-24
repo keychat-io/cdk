@@ -15,8 +15,8 @@ use cdk_common::wallet::{
     self, MintQuote, Transaction, TransactionDirection, TransactionId, TransactionKind,
 };
 use cdk_common::{
-    database, CurrencyUnit, Id, KeySet, KeySetInfo, Keys, MintInfo, PublicKey, SpendingConditions,
-    State,
+    amount, database, CurrencyUnit, Id, KeySet, KeySetInfo, Keys, MintInfo, PublicKey,
+    SpendingConditions, State,
 };
 use redb::{Database, MultimapTableDefinition, ReadableTable, TableDefinition};
 use tracing::instrument;
@@ -834,6 +834,7 @@ impl WalletDatabase for WalletRedbDatabase {
         mint_url: Option<MintUrl>,
         direction: Option<TransactionDirection>,
         unit: Option<CurrencyUnit>,
+        _amount: Option<i64>,
     ) -> Result<Vec<Transaction>, Self::Err> {
         // TODO: Implement actual logic
         // For now, return an empty Vec or a basic filter over list_transactions

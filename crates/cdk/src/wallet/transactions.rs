@@ -1,5 +1,10 @@
-use cdk_common::wallet::{
-    Transaction, TransactionDirection, TransactionId, TransactionKind, TransactionStatus,
+use std::str::FromStr;
+
+use cdk_common::{
+    mint_url::MintUrl,
+    wallet::{
+        Transaction, TransactionDirection, TransactionId, TransactionKind, TransactionStatus,
+    },
 };
 
 use crate::{Error, Wallet};
@@ -70,13 +75,41 @@ impl Wallet {
         Ok(transactions)
     }
 
+    /// list transactions with kind and offset
+    pub async fn list_transactions_with_kind_offset_mint(
+        &self,
+        offset: usize,
+        limit: usize,
+        mint_url: &str,
+        kind: &[TransactionKind],
+        direction: Option<TransactionDirection>,
+    ) -> Result<Vec<Transaction>, Error> {
+        let mut transactions = self
+            .localstore
+            .list_transactions_with_kind_offset(
+                offset,
+                limit,
+                kind,
+                Some(MintUrl::from_str(mint_url)?),
+                direction,
+                Some(self.unit.clone()),
+            )
+            .await?;
+
+        transactions.sort();
+
+        Ok(transactions)
+    }
+
     /// list transactions with kind and amount!=1 and offset
     pub async fn list_transactions_with_kind_amount_offset(
         &self,
         offset: usize,
         limit: usize,
+        mint_url: &str,
         kind: &[TransactionKind],
         direction: Option<TransactionDirection>,
+        amount: Option<i64>,
     ) -> Result<Vec<Transaction>, Error> {
         let mut transactions = self
             .localstore
@@ -84,9 +117,10 @@ impl Wallet {
                 offset,
                 limit,
                 kind,
-                Some(self.mint_url.clone()),
+                Some(MintUrl::from_str(mint_url)?),
                 direction,
                 Some(self.unit.clone()),
+                amount,
             )
             .await?;
 

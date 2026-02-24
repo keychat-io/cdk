@@ -258,12 +258,13 @@ impl MultiMintWallet {
         Ok(transactions)
     }
 
-    /// List transactions with kind and amount !=1 and offset
+    /// List transactions with kind and offset and mint
     #[instrument(skip(self))]
-    pub async fn list_transactions_with_kind_amount_offset(
+    pub async fn list_transactions_with_kind_offset_mint(
         &self,
         offset: usize,
         limit: usize,
+        mint_url: &str,
         kind: &[TransactionKind],
         direction: Option<TransactionDirection>,
     ) -> Result<Vec<Transaction>, Error> {
@@ -271,7 +272,34 @@ impl MultiMintWallet {
 
         for (_, wallet) in self.wallets.read().await.iter() {
             let wallet_transactions = wallet
-                .list_transactions_with_kind_amount_offset(offset, limit, kind, direction)
+                .list_transactions_with_kind_offset_mint(offset, limit, mint_url, kind, direction)
+                .await?;
+            transactions.extend(wallet_transactions);
+        }
+
+        transactions.sort();
+
+        Ok(transactions)
+    }
+
+    /// List transactions with kind and amount !=1 and offset
+    #[instrument(skip(self))]
+    pub async fn list_transactions_with_kind_amount_offset(
+        &self,
+        offset: usize,
+        limit: usize,
+        mint_url: &str,
+        kind: &[TransactionKind],
+        direction: Option<TransactionDirection>,
+        amount: Option<i64>,
+    ) -> Result<Vec<Transaction>, Error> {
+        let mut transactions = Vec::new();
+
+        for (_, wallet) in self.wallets.read().await.iter() {
+            let wallet_transactions = wallet
+                .list_transactions_with_kind_amount_offset(
+                    offset, limit, mint_url, kind, direction, amount,
+                )
                 .await?;
             transactions.extend(wallet_transactions);
         }

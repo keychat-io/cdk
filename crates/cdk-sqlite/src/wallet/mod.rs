@@ -982,8 +982,7 @@ ON CONFLICT(id) DO UPDATE SET
         .collect::<Vec<_>>())
     }
 
-    // filter out amount == 1
-    #[instrument(skip(self))]
+    // filter out amount == 1 and amount != 1 txs
     async fn list_transactions_with_kind_amount_offset(
         &self,
         offset: usize,
@@ -992,8 +991,19 @@ ON CONFLICT(id) DO UPDATE SET
         mint_url: Option<MintUrl>,
         direction: Option<TransactionDirection>,
         unit: Option<CurrencyUnit>,
+        amount: Option<i64>,
     ) -> Result<Vec<Transaction>, Self::Err> {
-        Ok(Statement::new(
+        // amount:
+        // - None => no filter
+        // - Some(1) => amount == 1
+        // - Some(-1) => amount != 1 (special meaning)
+        let (amount_sql, amount_bind) = match amount {
+            None => ("", None),
+            Some(-1) => (" AND amount != 1", None),
+            Some(v) => (" AND amount = :amount", Some(v)),
+        };
+
+        let sql = format!(
             r#"
             SELECT
                 mint_url,
@@ -1009,28 +1019,41 @@ ON CONFLICT(id) DO UPDATE SET
                 memo,
                 metadata
             FROM
-                transactions where amount != 1 and kind IN (:kinds) order by timestamp desc limit :l offset :o
-            "#,
-        )
-        .bind_vec(
-            ":kinds",
-            kinds.iter().map(|k| k.to_string()).collect::<Vec<_>>(),
-        )
-        .bind(":l", limit as i64)
-        .bind(":o", offset as i64)
-        .fetch_all(&self.pool.get().map_err(Error::Pool)?)
-        .map_err(Error::Sqlite)?
-        .into_iter()
-        .filter_map(|row| {
-            // TODO: Avoid a table scan by passing the heavy lifting of checking to the DB engine
-            let transaction = sqlite_row_to_transaction(row).ok()?;
-            if transaction.matches_conditions(&mint_url, &direction, &unit) {
-                Some(transaction)
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>())
+                transactions
+            WHERE
+                kind IN (:kinds)
+                {amount_sql}
+            ORDER BY timestamp DESC
+            LIMIT :l OFFSET :o
+            "#
+        );
+
+        let mut stmt = Statement::new(sql)
+            .bind_vec(
+                ":kinds",
+                kinds.iter().map(|k| k.to_string()).collect::<Vec<_>>(),
+            )
+            .bind(":l", limit as i64)
+            .bind(":o", offset as i64);
+
+        if let Some(v) = amount_bind {
+            stmt = stmt.bind(":amount", v);
+        }
+
+        Ok(stmt
+            .fetch_all(&self.pool.get().map_err(Error::Pool)?)
+            .map_err(Error::Sqlite)?
+            .into_iter()
+            .filter_map(|row| {
+                // TODO: Avoid a table scan by passing the heavy lifting of checking to the DB engine
+                let transaction = sqlite_row_to_transaction(row).ok()?;
+                if transaction.matches_conditions(&mint_url, &direction, &unit) {
+                    Some(transaction)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>())
     }
 
     #[instrument(skip(self))]

@@ -147,6 +147,7 @@ pub trait Database: Debug {
         mint_url: Option<MintUrl>,
         direction: Option<TransactionDirection>,
         unit: Option<CurrencyUnit>,
+        amount: Option<i64>,
     ) -> Result<Vec<Transaction>, Self::Err>;
 
     /// Remove transaction from storage
