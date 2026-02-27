@@ -296,6 +296,9 @@ impl MultiMintWallet {
         let mut transactions = Vec::new();
 
         for (_, wallet) in self.wallets.read().await.iter() {
+            if wallet.mint_url.to_string() != mint_url.trim_end_matches('/') {
+                continue;
+            }
             let wallet_transactions = wallet
                 .list_transactions_with_kind_amount_offset(
                     offset, limit, mint_url, kind, direction, amount,
