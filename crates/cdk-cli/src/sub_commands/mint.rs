@@ -57,7 +57,7 @@ pub async fn mint(
                 let amount = sub_command_args
                     .amount
                     .ok_or(anyhow!("Amount must be defined"))?;
-                let quote = wallet
+                let (quote, _tx) = wallet
                     .mint_quote(
                         PaymentMethod::BOLT11,
                         Some(Amount::from(amount)),
@@ -86,7 +86,7 @@ pub async fn mint(
                         .single_use
                         .map_or("none".to_string(), |b| b.to_string())
                 );
-                let quote = wallet
+                let (quote, _tx) = wallet
                     .mint_quote(
                         payment_method.clone(),
                         amount.map(|a| a.into()),
@@ -115,7 +115,7 @@ pub async fn mint(
                         .single_use
                         .map_or("none".to_string(), |b| b.to_string())
                 );
-                let quote = wallet
+                let (quote, _tx) = wallet
                     .mint_quote(payment_method.clone(), amount.map(|a| a.into()), None, None)
                     .await?;
 

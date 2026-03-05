@@ -141,10 +141,13 @@ fn test_transaction(mint_url: MintUrl, direction: TransactionDirection) -> Trans
     Transaction {
         mint_url,
         direction,
+        kind: crate::wallet::TransactionKind::Cashu,
         amount: Amount::from(100),
         fee: Amount::from(1),
         unit: CurrencyUnit::Sat,
         ys,
+        token: String::new(),
+        status: crate::wallet::TransactionStatus::Success,
         timestamp: 1234567890,
         memo: Some("test transaction".to_string()),
         metadata: HashMap::new(),

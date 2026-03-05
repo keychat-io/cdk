@@ -1,6 +1,7 @@
 //! Wallet-related FFI types
 
 use std::collections::HashMap;
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
@@ -377,7 +378,7 @@ impl PreparedSend {
         memo: Option<String>,
     ) -> Result<Token, FfiError> {
         let send_memo = memo.map(|m| cdk::wallet::SendMemo::for_token(&m));
-        let token = self
+        let tx = self
             .wallet
             .confirm_send(
                 self.operation_id,
@@ -391,6 +392,7 @@ impl PreparedSend {
             )
             .await?;
 
+        let token = cdk::nuts::Token::from_str(&tx.token)?;
         Ok(token.into())
     }
 

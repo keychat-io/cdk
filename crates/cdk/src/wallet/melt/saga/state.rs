@@ -17,7 +17,7 @@
 //! Note: `PaymentPending` is a persistence state in `WalletSaga`, not a typestate.
 //! When payment is pending, the saga returns an error and recovery handles it later.
 
-use cdk_common::wallet::WalletSaga;
+use cdk_common::wallet::{Transaction, WalletSaga};
 use cdk_common::MeltQuoteState;
 use uuid::Uuid;
 
@@ -78,6 +78,8 @@ pub struct Finalized {
     pub payment_proof: Option<String>,
     /// Change proofs returned from the melt
     pub change: Option<Proofs>,
+    /// The transaction record
+    pub transaction: Transaction,
 }
 
 /// PaymentPending state - melt is asynchronous and pending at the mint.

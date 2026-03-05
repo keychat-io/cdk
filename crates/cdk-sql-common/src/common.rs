@@ -103,7 +103,24 @@ where
             .is_none();
 
         if is_missing {
-            query(sql)?.batch(conn).await?;
+            match query(sql)?.batch(conn).await {
+                Ok(_) => {}
+                Err(e) => {
+                    let err_msg = format!("{:?}", e);
+                    // Handle "duplicate column name" errors gracefully.
+                    // This can happen when upgrading from a database that already had
+                    // these columns in the initial schema.
+                    if err_msg.contains("duplicate column name") {
+                        tracing::warn!(
+                            "Migration {} encountered duplicate column (already exists), continuing: {}",
+                            name,
+                            err_msg
+                        );
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
             query(r#"INSERT INTO migrations (name) VALUES (:name)"#)?
                 .bind("name", name)
                 .execute(conn)

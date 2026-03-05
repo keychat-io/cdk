@@ -7,6 +7,8 @@ use std::str::FromStr;
 
 use tracing::instrument;
 
+use cdk_common::wallet::Transaction;
+
 use crate::amount::SplitTarget;
 use crate::nuts::{Proofs, SecretKey, Token};
 use crate::{ensure_cdk, Amount, Error, Wallet};
@@ -40,11 +42,11 @@ impl Wallet {
         opts: ReceiveOptions,
         memo: Option<String>,
         token: Option<String>,
-    ) -> Result<Amount, Error> {
+    ) -> Result<Transaction, Error> {
         let saga = ReceiveSaga::new(self);
         let saga = saga.prepare(proofs, opts, memo, token).await?;
         let saga = saga.execute().await?;
-        Ok(saga.into_amount())
+        Ok(saga.into_transaction())
     }
 
     /// Receive
@@ -76,7 +78,7 @@ impl Wallet {
         &self,
         encoded_token: &str,
         opts: ReceiveOptions,
-    ) -> Result<Amount, Error> {
+    ) -> Result<Transaction, Error> {
         let token = Token::from_str(encoded_token)?;
 
         let unit = token.unit().unwrap_or_default();
@@ -92,7 +94,7 @@ impl Wallet {
 
         ensure_cdk!(self.mint_url == token.mint_url()?, Error::IncorrectMint);
 
-        let amount = self
+        let tx = self
             .receive_proofs(
                 proofs,
                 opts,
@@ -101,7 +103,7 @@ impl Wallet {
             )
             .await?;
 
-        Ok(amount)
+        Ok(tx)
     }
 
     /// Receive
@@ -134,7 +136,7 @@ impl Wallet {
         &self,
         binary_token: &Vec<u8>,
         opts: ReceiveOptions,
-    ) -> Result<Amount, Error> {
+    ) -> Result<Transaction, Error> {
         let token_str = Token::try_from(binary_token)?.to_string();
         self.receive(token_str.as_str(), opts).await
     }

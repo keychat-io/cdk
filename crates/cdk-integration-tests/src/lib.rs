@@ -52,7 +52,7 @@ pub fn standard_keyset_amounts(max_order: u32) -> Vec<u64> {
 }
 
 pub async fn fund_wallet(wallet: Arc<Wallet>, amount: Amount) {
-    let quote = wallet
+    let (quote, _tx) = wallet
         .mint_quote(PaymentMethod::BOLT11, Some(amount), None, None)
         .await
         .expect("Could not get mint quote");

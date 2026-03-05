@@ -162,25 +162,26 @@ async fn finalize_melt_common<'a>(
         .update_proofs_state(spent_ys, State::Spent)
         .await?;
 
-    wallet
-        .localstore
-        .add_transaction(Transaction {
-            mint_url: wallet.mint_url.clone(),
-            direction: TransactionDirection::Outgoing,
-            amount: quote_info.amount,
-            fee,
-            unit: wallet.unit.clone(),
-            ys: final_proofs.ys()?,
-            timestamp: unix_time(),
-            memo: None,
-            metadata,
-            quote_id: Some(quote_info.id.clone()),
-            payment_request: Some(quote_info.request.clone()),
-            payment_proof: payment_preimage.clone(),
-            payment_method: Some(quote_info.payment_method.clone()),
-            saga_id: Some(operation_id),
-        })
-        .await?;
+    let tx = Transaction {
+        mint_url: wallet.mint_url.clone(),
+        direction: TransactionDirection::Outgoing,
+        kind: cdk_common::wallet::TransactionKind::LN,
+        amount: quote_info.amount,
+        fee,
+        unit: wallet.unit.clone(),
+        ys: final_proofs.ys()?,
+        token: quote_info.request.clone(),
+        status: cdk_common::wallet::TransactionStatus::Success,
+        timestamp: unix_time(),
+        memo: None,
+        metadata,
+        quote_id: Some(quote_info.id.clone()),
+        payment_request: Some(quote_info.request.clone()),
+        payment_proof: payment_preimage.clone(),
+        payment_method: Some(quote_info.payment_method.clone()),
+        saga_id: Some(operation_id),
+    };
+    wallet.localstore.add_transaction(tx.clone()).await?;
 
     if let Err(e) = wallet.localstore.release_melt_quote(&operation_id).await {
         tracing::warn!(
@@ -208,6 +209,7 @@ async fn finalize_melt_common<'a>(
             fee,
             payment_proof: payment_preimage,
             change: change_proofs,
+            transaction: tx,
         },
     })
 }
@@ -1149,5 +1151,15 @@ impl<'a> MeltSaga<'a, Finalized> {
     /// Consume the saga and return the change proofs
     pub fn into_change(self) -> Option<Proofs> {
         self.state_data.change
+    }
+
+    /// Get the transaction record
+    pub fn transaction(&self) -> &Transaction {
+        &self.state_data.transaction
+    }
+
+    /// Consume the saga and return the transaction record
+    pub fn into_transaction(self) -> Transaction {
+        self.state_data.transaction
     }
 }

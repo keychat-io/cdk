@@ -131,11 +131,11 @@ impl Wallet {
         token: std::sync::Arc<Token>,
         options: ReceiveOptions,
     ) -> Result<Amount, FfiError> {
-        let amount = self
+        let tx = self
             .inner
             .receive(&token.to_string(), options.into())
             .await?;
-        Ok(amount.into())
+        Ok(tx.amount.into())
     }
 
     /// Restore wallet from seed
@@ -163,11 +163,11 @@ impl Wallet {
             proofs.into_iter().map(|p| p.try_into()).collect();
         let cdk_proofs = cdk_proofs?;
 
-        let amount = self
+        let tx = self
             .inner
             .receive_proofs(cdk_proofs, options.into(), memo, token)
             .await?;
-        Ok(amount.into())
+        Ok(tx.amount.into())
     }
 
     /// Get all pending send operations
@@ -216,7 +216,7 @@ impl Wallet {
         description: Option<String>,
         extra: Option<String>,
     ) -> Result<MintQuote, FfiError> {
-        let quote = self
+        let (quote, _tx) = self
             .inner
             .mint_quote(payment_method, amount.map(Into::into), description, extra)
             .await?;

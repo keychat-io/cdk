@@ -1,4 +1,9 @@
-use cdk_common::wallet::{Transaction, TransactionDirection, TransactionId};
+use std::str::FromStr;
+
+use cdk_common::mint_url::MintUrl;
+use cdk_common::wallet::{
+    Transaction, TransactionDirection, TransactionId, TransactionKind, TransactionStatus,
+};
 use cdk_common::Proofs;
 
 use crate::{Error, Wallet};
@@ -21,6 +26,136 @@ impl Wallet {
         transactions.sort();
 
         Ok(transactions)
+    }
+
+    /// List transactions with status
+    pub async fn list_transactions_with_status(
+        &self,
+        direction: Option<TransactionDirection>,
+        status: TransactionStatus,
+    ) -> Result<Vec<Transaction>, Error> {
+        let mut transactions = self
+            .localstore
+            .list_transactions_with_status(
+                Some(self.mint_url.clone()),
+                direction,
+                Some(self.unit.clone()),
+                status,
+            )
+            .await?;
+
+        transactions.sort();
+
+        Ok(transactions)
+    }
+
+    /// List transactions with kind and offset
+    pub async fn list_transactions_with_kind_offset(
+        &self,
+        offset: usize,
+        limit: usize,
+        kind: &[TransactionKind],
+        direction: Option<TransactionDirection>,
+    ) -> Result<Vec<Transaction>, Error> {
+        let mut transactions = self
+            .localstore
+            .list_transactions_with_kind_offset(
+                offset,
+                limit,
+                kind,
+                Some(self.mint_url.clone()),
+                direction,
+                Some(self.unit.clone()),
+            )
+            .await?;
+
+        transactions.sort();
+
+        Ok(transactions)
+    }
+
+    /// List transactions with kind and offset for a specific mint
+    pub async fn list_transactions_with_kind_offset_mint(
+        &self,
+        offset: usize,
+        limit: usize,
+        mint_url: &str,
+        kind: &[TransactionKind],
+        direction: Option<TransactionDirection>,
+    ) -> Result<Vec<Transaction>, Error> {
+        let mut transactions = self
+            .localstore
+            .list_transactions_with_kind_offset(
+                offset,
+                limit,
+                kind,
+                Some(MintUrl::from_str(mint_url)?),
+                direction,
+                Some(self.unit.clone()),
+            )
+            .await?;
+
+        transactions.sort();
+
+        Ok(transactions)
+    }
+
+    /// List transactions with kind and amount filter and offset
+    pub async fn list_transactions_with_kind_amount_offset(
+        &self,
+        offset: usize,
+        limit: usize,
+        mint_url: &str,
+        kind: &[TransactionKind],
+        direction: Option<TransactionDirection>,
+        amount: Option<i64>,
+    ) -> Result<Vec<Transaction>, Error> {
+        let mut transactions = self
+            .localstore
+            .list_transactions_with_kind_amount_offset(
+                offset,
+                limit,
+                kind,
+                Some(MintUrl::from_str(mint_url)?),
+                direction,
+                Some(self.unit.clone()),
+                amount,
+            )
+            .await?;
+
+        transactions.sort();
+
+        Ok(transactions)
+    }
+
+    /// List pending transactions
+    pub async fn list_pending_transactions(&self) -> Result<Vec<Transaction>, Error> {
+        self.list_transactions_with_status(None, TransactionStatus::Pending)
+            .await
+    }
+
+    /// List failed transactions
+    pub async fn list_failed_transactions(&self) -> Result<Vec<Transaction>, Error> {
+        self.list_transactions_with_status(None, TransactionStatus::Failed)
+            .await
+    }
+
+    /// List pending and failed transactions
+    pub async fn list_pending_failed_transactions(&self) -> Result<Vec<Transaction>, Error> {
+        let pending_txs = self.list_pending_transactions().await?;
+        let failed_txs = self.list_failed_transactions().await?;
+        let mut result = Vec::new();
+        result.extend(pending_txs);
+        result.extend(failed_txs);
+        Ok(result)
+    }
+
+    /// Remove transactions older than the given timestamp
+    pub async fn remove_transactions(&self, unix_timestamp_le: u64) -> Result<(), Error> {
+        self.localstore
+            .remove_transactions(unix_timestamp_le)
+            .await?;
+        Ok(())
     }
 
     /// Get transaction by ID

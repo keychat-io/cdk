@@ -21,6 +21,7 @@ use crate::nuts::CurrencyUnit;
 #[cfg(all(feature = "tor", not(target_arch = "wasm32")))]
 use crate::wallet::mint_connector::transport::tor_transport::TorAsync;
 use crate::Wallet;
+use cdk_common::wallet::{Transaction, TransactionDirection, TransactionKind};
 
 /// Data extracted from a token
 ///
@@ -223,10 +224,11 @@ impl WalletRepositoryBuilder {
 #[derive(Clone)]
 pub struct WalletRepository {
     /// Storage backend
-    localstore: Arc<dyn WalletDatabase<database::Error> + Send + Sync>,
-    seed: [u8; 64],
+    pub localstore: Arc<dyn WalletDatabase<database::Error> + Send + Sync>,
+    /// Seed for key derivation
+    pub seed: [u8; 64],
     /// Wallets indexed by (mint URL, currency unit)
-    wallets: Arc<RwLock<BTreeMap<WalletKey, Wallet>>>,
+    pub wallets: Arc<RwLock<BTreeMap<WalletKey, Wallet>>>,
     /// Proxy configuration for HTTP clients (optional)
     proxy_config: Option<url::Url>,
     /// Shared Tor transport to be cloned into each TorHttpClient (if enabled)
@@ -787,6 +789,150 @@ impl WalletRepository {
         transactions.sort();
 
         Ok(transactions)
+    }
+
+    /// List pending and failed transactions
+    #[instrument(skip(self))]
+    pub async fn list_pending_failed_transactions(
+        &self,
+        direction: Option<TransactionDirection>,
+    ) -> Result<Vec<Transaction>, Error> {
+        let mut transactions = Vec::new();
+
+        for (_, wallet) in self.wallets.read().await.iter() {
+            let wallet_transactions = wallet.list_pending_failed_transactions().await?;
+            transactions.extend(wallet_transactions);
+        }
+
+        transactions.sort();
+
+        Ok(transactions)
+    }
+
+    /// List transactions with kind and offset
+    #[instrument(skip(self))]
+    pub async fn list_transactions_with_kind_offset(
+        &self,
+        offset: usize,
+        limit: usize,
+        kind: &[TransactionKind],
+        direction: Option<TransactionDirection>,
+    ) -> Result<Vec<Transaction>, Error> {
+        let mut transactions = Vec::new();
+
+        for (_, wallet) in self.wallets.read().await.iter() {
+            let wallet_transactions = wallet
+                .list_transactions_with_kind_offset(offset, limit, kind, direction)
+                .await?;
+            transactions.extend(wallet_transactions);
+        }
+
+        transactions.sort();
+
+        Ok(transactions)
+    }
+
+    /// List transactions with kind and amount !=1 and offset
+    #[instrument(skip(self))]
+    pub async fn list_transactions_with_kind_amount_offset(
+        &self,
+        offset: usize,
+        limit: usize,
+        mint_url: &str,
+        kind: &[TransactionKind],
+        direction: Option<TransactionDirection>,
+        amount: Option<i64>,
+    ) -> Result<Vec<Transaction>, Error> {
+        let mut transactions = Vec::new();
+
+        for (_, wallet) in self.wallets.read().await.iter() {
+            if wallet.mint_url.to_string() != mint_url.trim_end_matches('/') {
+                continue;
+            }
+            let wallet_transactions = wallet
+                .list_transactions_with_kind_amount_offset(
+                    offset, limit, mint_url, kind, direction, amount,
+                )
+                .await?;
+            transactions.extend(wallet_transactions);
+        }
+
+        transactions.sort();
+
+        Ok(transactions)
+    }
+
+    /// List pending transactions with kind
+    #[instrument(skip(self))]
+    pub async fn list_pending_transactions_with_kind(
+        &self,
+        kind: &[TransactionKind],
+        direction: Option<TransactionDirection>,
+    ) -> Result<Vec<Transaction>, Error> {
+        let mut transactions = Vec::new();
+
+        for (_, wallet) in self.wallets.read().await.iter() {
+            let wallet_transactions = wallet.list_pending_transactions().await?;
+            for t in wallet_transactions {
+                if kind.contains(&t.kind) {
+                    transactions.push(t);
+                }
+            }
+            // transactions.extend(wallet_transactions);
+        }
+
+        transactions.sort();
+
+        Ok(transactions)
+    }
+
+    /// List failed transactions with kind
+    #[instrument(skip(self))]
+    pub async fn list_failed_transactions_with_kind(
+        &self,
+        kind: &[TransactionKind],
+        direction: Option<TransactionDirection>,
+    ) -> Result<Vec<Transaction>, Error> {
+        let mut transactions = Vec::new();
+
+        for (_, wallet) in self.wallets.read().await.iter() {
+            let wallet_transactions = wallet.list_failed_transactions().await?;
+            for t in wallet_transactions {
+                if kind.contains(&t.kind) {
+                    transactions.push(t);
+                }
+            }
+            // transactions.extend(wallet_transactions);
+        }
+
+        transactions.sort();
+
+        Ok(transactions)
+    }
+
+    /// remove transactions by timestamp
+    #[instrument(skip(self))]
+    pub async fn remove_transactions(&self, unix_timestamp_le: u64) -> Result<(), Error> {
+        for (_, wallet) in self.wallets.read().await.iter() {
+            wallet.remove_transactions(unix_timestamp_le).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Check pending proofs across all wallets
+    pub async fn check_pending(&self) -> Result<(), Error> {
+        for (_, wallet) in self.wallets.read().await.iter() {
+            match wallet.check_all_pending_proofs().await {
+                Ok(reclaimed) => {
+                    if reclaimed > crate::Amount::ZERO {
+                        tracing::info!("Reclaimed {} from pending proofs", reclaimed);
+                    }
+                }
+                Err(e) => tracing::warn!("Error checking pending proofs: {e}"),
+            }
+        }
+        Ok(())
     }
 
     /// Check all pending mint quotes and mint any that are paid

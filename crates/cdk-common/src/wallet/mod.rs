@@ -328,6 +328,8 @@ pub struct Transaction {
     pub mint_url: MintUrl,
     /// Transaction direction
     pub direction: TransactionDirection,
+    /// Transaction kind
+    pub kind: TransactionKind,
     /// Amount
     pub amount: Amount,
     /// Fee
@@ -336,6 +338,10 @@ pub struct Transaction {
     pub unit: CurrencyUnit,
     /// Proof Ys
     pub ys: Vec<PublicKey>,
+    /// Cashu token or LN invoice
+    pub token: String,
+    /// Transaction status
+    pub status: TransactionStatus,
     /// Unix timestamp
     pub timestamp: u64,
     /// Memo
@@ -403,6 +409,74 @@ impl Ord for Transaction {
     }
 }
 
+/// Transaction Status
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TransactionStatus {
+    /// Pending
+    Pending,
+    /// Success
+    Success,
+    /// Failed
+    Failed,
+    /// Expired
+    Expired,
+}
+
+impl std::fmt::Display for TransactionStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TransactionStatus::Pending => write!(f, "Pending"),
+            TransactionStatus::Success => write!(f, "Success"),
+            TransactionStatus::Failed => write!(f, "Failed"),
+            TransactionStatus::Expired => write!(f, "Expired"),
+        }
+    }
+}
+
+impl FromStr for TransactionStatus {
+    type Err = Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "Pending" => Ok(Self::Pending),
+            "Success" => Ok(Self::Success),
+            "Failed" => Ok(Self::Failed),
+            "Expired" => Ok(Self::Expired),
+            _ => Err(Error::InvalidTransactionStatus),
+        }
+    }
+}
+
+/// Transaction Kind
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TransactionKind {
+    /// Cashu
+    Cashu,
+    /// Lightning Network
+    LN,
+}
+
+impl std::fmt::Display for TransactionKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TransactionKind::Cashu => write!(f, "Cashu"),
+            TransactionKind::LN => write!(f, "LN"),
+        }
+    }
+}
+
+impl FromStr for TransactionKind {
+    type Err = Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "Cashu" => Ok(Self::Cashu),
+            "LN" => Ok(Self::LN),
+            _ => Err(Error::InvalidTransactionKind),
+        }
+    }
+}
+
 /// Transaction Direction
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TransactionDirection {
@@ -410,6 +484,8 @@ pub enum TransactionDirection {
     Incoming,
     /// Outgoing transaction (i.e., send or melt)
     Outgoing,
+    /// Split unit 1
+    Split,
 }
 
 impl std::fmt::Display for TransactionDirection {
@@ -417,6 +493,7 @@ impl std::fmt::Display for TransactionDirection {
         match self {
             TransactionDirection::Incoming => write!(f, "Incoming"),
             TransactionDirection::Outgoing => write!(f, "Outgoing"),
+            TransactionDirection::Split => write!(f, "Split"),
         }
     }
 }
@@ -428,6 +505,7 @@ impl FromStr for TransactionDirection {
         match value {
             "Incoming" => Ok(Self::Incoming),
             "Outgoing" => Ok(Self::Outgoing),
+            "Split" => Ok(Self::Split),
             _ => Err(Error::InvalidTransactionDirection),
         }
     }

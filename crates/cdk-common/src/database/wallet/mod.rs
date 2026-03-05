@@ -12,7 +12,8 @@ use crate::nuts::{
     CurrencyUnit, Id, KeySetInfo, Keys, MintInfo, PublicKey, SpendingConditions, State,
 };
 use crate::wallet::{
-    self, MintQuote as WalletMintQuote, ProofInfo, Transaction, TransactionDirection, TransactionId,
+    self, MintQuote as WalletMintQuote, ProofInfo, Transaction, TransactionDirection,
+    TransactionId, TransactionKind, TransactionStatus,
 };
 
 #[cfg(feature = "test")]
@@ -145,8 +146,43 @@ where
     /// Remove [`Keys`] from storage
     async fn remove_keys(&self, id: &Id) -> Result<(), Err>;
 
+    /// List transactions with status from storage
+    async fn list_transactions_with_status(
+        &self,
+        mint_url: Option<MintUrl>,
+        direction: Option<TransactionDirection>,
+        unit: Option<CurrencyUnit>,
+        status: TransactionStatus,
+    ) -> Result<Vec<Transaction>, Err>;
+
+    /// List transactions with kind and offset from storage
+    async fn list_transactions_with_kind_offset(
+        &self,
+        offset: usize,
+        limit: usize,
+        kind: &[TransactionKind],
+        mint_url: Option<MintUrl>,
+        direction: Option<TransactionDirection>,
+        unit: Option<CurrencyUnit>,
+    ) -> Result<Vec<Transaction>, Err>;
+
+    /// List transactions with kind, amount filter and offset from storage
+    async fn list_transactions_with_kind_amount_offset(
+        &self,
+        offset: usize,
+        limit: usize,
+        kind: &[TransactionKind],
+        mint_url: Option<MintUrl>,
+        direction: Option<TransactionDirection>,
+        unit: Option<CurrencyUnit>,
+        amount: Option<i64>,
+    ) -> Result<Vec<Transaction>, Err>;
+
     /// Remove transaction from storage
     async fn remove_transaction(&self, transaction_id: TransactionId) -> Result<(), Err>;
+
+    /// Remove transactions from storage by timestamp
+    async fn remove_transactions(&self, unix_timestamp_le: u64) -> Result<(), Err>;
 
     /// Add a wallet saga to storage.
     ///

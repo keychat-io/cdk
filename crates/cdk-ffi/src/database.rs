@@ -791,6 +791,63 @@ impl CdkWalletDatabase<cdk::cdk_database::Error> for WalletDatabaseBridge {
             .map_err(|e| cdk::cdk_database::Error::Database(e.to_string().into()))
     }
 
+    async fn list_transactions_with_status(
+        &self,
+        mint_url: Option<cdk::mint_url::MintUrl>,
+        direction: Option<cdk::wallet::types::TransactionDirection>,
+        unit: Option<cdk::nuts::CurrencyUnit>,
+        status: cdk::wallet::types::TransactionStatus,
+    ) -> Result<Vec<cdk::wallet::types::Transaction>, cdk::cdk_database::Error> {
+        let all = self.list_transactions(mint_url, direction, unit).await?;
+        Ok(all.into_iter().filter(|tx| tx.status == status).collect())
+    }
+
+    async fn list_transactions_with_kind_offset(
+        &self,
+        offset: usize,
+        limit: usize,
+        kind: &[cdk::wallet::types::TransactionKind],
+        mint_url: Option<cdk::mint_url::MintUrl>,
+        direction: Option<cdk::wallet::types::TransactionDirection>,
+        unit: Option<cdk::nuts::CurrencyUnit>,
+    ) -> Result<Vec<cdk::wallet::types::Transaction>, cdk::cdk_database::Error> {
+        let all = self.list_transactions(mint_url, direction, unit).await?;
+        Ok(all
+            .into_iter()
+            .filter(|tx| kind.contains(&tx.kind))
+            .skip(offset)
+            .take(limit)
+            .collect())
+    }
+
+    async fn list_transactions_with_kind_amount_offset(
+        &self,
+        offset: usize,
+        limit: usize,
+        kind: &[cdk::wallet::types::TransactionKind],
+        mint_url: Option<cdk::mint_url::MintUrl>,
+        direction: Option<cdk::wallet::types::TransactionDirection>,
+        unit: Option<cdk::nuts::CurrencyUnit>,
+        amount: Option<i64>,
+    ) -> Result<Vec<cdk::wallet::types::Transaction>, cdk::cdk_database::Error> {
+        let all = self.list_transactions(mint_url, direction, unit).await?;
+        Ok(all
+            .into_iter()
+            .filter(|tx| {
+                if !kind.contains(&tx.kind) {
+                    return false;
+                }
+                match amount {
+                    None => true,
+                    Some(-1) => u64::from(tx.amount) != 1,
+                    Some(v) => u64::from(tx.amount) == v as u64,
+                }
+            })
+            .skip(offset)
+            .take(limit)
+            .collect())
+    }
+
     async fn remove_transaction(
         &self,
         transaction_id: cdk::wallet::types::TransactionId,
@@ -800,6 +857,20 @@ impl CdkWalletDatabase<cdk::cdk_database::Error> for WalletDatabaseBridge {
             .remove_transaction(ffi_id)
             .await
             .map_err(|e| cdk::cdk_database::Error::Database(e.to_string().into()))
+    }
+
+    async fn remove_transactions(
+        &self,
+        unix_timestamp_le: u64,
+    ) -> Result<(), cdk::cdk_database::Error> {
+        // Get all transactions and remove those with timestamp <= threshold
+        let all = self.list_transactions(None, None, None).await?;
+        for tx in all {
+            if tx.timestamp <= unix_timestamp_le {
+                self.remove_transaction(tx.id()).await?;
+            }
+        }
+        Ok(())
     }
 
     async fn add_saga(&self, saga: WalletSaga) -> Result<(), cdk::cdk_database::Error> {

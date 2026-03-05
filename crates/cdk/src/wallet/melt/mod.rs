@@ -182,14 +182,17 @@ impl<'a> PendingMelt<'a> {
                                 .finalize(state, payment_preimage, change, self.metadata)
                                 .await?;
 
-                            return Ok(FinalizedMelt::new(
+                            let tx = finalized.transaction().clone();
+                            let mut result = FinalizedMelt::new(
                                 finalized.quote_id().to_string(),
                                 finalized.state(),
                                 finalized.payment_proof().map(|s| s.to_string()),
                                 finalized.amount(),
                                 finalized.fee_paid(),
                                 finalized.into_change(),
-                            ));
+                            );
+                            result.set_transaction(tx);
+                            return Ok(result);
                         }
                         MeltQuoteState::Failed
                         | MeltQuoteState::Unpaid
@@ -504,14 +507,19 @@ impl<'a> PreparedMelt<'a> {
         let result = melt_requested.execute_async(self.metadata.clone()).await?;
 
         match result {
-            MeltSagaResult::Finalized(finalized) => Ok(MeltOutcome::Paid(FinalizedMelt::new(
-                finalized.quote_id().to_string(),
-                finalized.state(),
-                finalized.payment_proof().map(|s| s.to_string()),
-                finalized.amount(),
-                finalized.fee_paid(),
-                finalized.into_change(),
-            ))),
+            MeltSagaResult::Finalized(finalized) => {
+                let tx = finalized.transaction().clone();
+                let mut fm = FinalizedMelt::new(
+                    finalized.quote_id().to_string(),
+                    finalized.state(),
+                    finalized.payment_proof().map(|s| s.to_string()),
+                    finalized.amount(),
+                    finalized.fee_paid(),
+                    finalized.into_change(),
+                );
+                fm.set_transaction(tx);
+                Ok(MeltOutcome::Paid(fm))
+            }
             MeltSagaResult::Pending(pending_saga) => Ok(MeltOutcome::Pending(PendingMelt {
                 saga: Box::new(pending_saga),
                 metadata: self.metadata,
@@ -687,14 +695,19 @@ impl Wallet {
         let result = melt_requested.execute_async(metadata.clone()).await?;
 
         match result {
-            MeltSagaResult::Finalized(finalized) => Ok(FinalizedMelt::new(
-                finalized.quote_id().to_string(),
-                finalized.state(),
-                finalized.payment_proof().map(|s| s.to_string()),
-                finalized.amount(),
-                finalized.fee_paid(),
-                finalized.into_change(),
-            )),
+            MeltSagaResult::Finalized(finalized) => {
+                let tx = finalized.transaction().clone();
+                let mut fm = FinalizedMelt::new(
+                    finalized.quote_id().to_string(),
+                    finalized.state(),
+                    finalized.payment_proof().map(|s| s.to_string()),
+                    finalized.amount(),
+                    finalized.fee_paid(),
+                    finalized.into_change(),
+                );
+                fm.set_transaction(tx);
+                Ok(fm)
+            }
             MeltSagaResult::Pending(pending_saga) => {
                 let pending = PendingMelt {
                     saga: Box::new(pending_saga),
@@ -793,6 +806,7 @@ impl Wallet {
                     .add_transaction(Transaction {
                         mint_url: self.mint_url.clone(),
                         direction: TransactionDirection::Outgoing,
+                        kind: cdk_common::wallet::TransactionKind::LN,
                         amount,
                         fee: proofs_total
                             .checked_sub(amount)
@@ -800,6 +814,8 @@ impl Wallet {
                             .unwrap_or_default(),
                         unit: quote.unit.clone(),
                         ys: pending_proofs.ys()?,
+                        token: quote.request.clone(),
+                        status: cdk_common::wallet::TransactionStatus::Success,
                         timestamp: unix_time(),
                         memo: None,
                         metadata: HashMap::new(),

@@ -423,7 +423,7 @@ impl<'a> SendSaga<'a, Prepared> {
     pub async fn confirm(
         mut self,
         memo: Option<SendMemo>,
-    ) -> Result<(Token, SendSaga<'a, TokenCreated>), Error> {
+    ) -> Result<(Token, Transaction, SendSaga<'a, TokenCreated>), Error> {
         let operation_id = self.state_data.operation_id;
         let amount = self.state_data.amount;
         let options = self.state_data.options.clone();
@@ -496,32 +496,33 @@ impl<'a> SendSaga<'a, Prepared> {
             let token_memo =
                 send_memo.and_then(|m| if m.include_memo { Some(m.memo) } else { None });
 
-            self.wallet
-                .localstore
-                .add_transaction(Transaction {
-                    mint_url: self.wallet.mint_url.clone(),
-                    direction: TransactionDirection::Outgoing,
-                    amount,
-                    fee: total_send_fee,
-                    unit: self.wallet.unit.clone(),
-                    ys: final_proofs_to_send.ys()?,
-                    timestamp: unix_time(),
-                    memo: token_memo.clone(),
-                    metadata: options.metadata.clone(),
-                    quote_id: None,
-                    payment_request: None,
-                    payment_proof: None,
-                    payment_method: None,
-                    saga_id: Some(operation_id),
-                })
-                .await?;
-
             let token = Token::new(
                 self.wallet.mint_url.clone(),
                 final_proofs_to_send.clone(),
-                token_memo,
+                token_memo.clone(),
                 self.wallet.unit.clone(),
             );
+
+            let tx = Transaction {
+                mint_url: self.wallet.mint_url.clone(),
+                direction: TransactionDirection::Outgoing,
+                kind: cdk_common::wallet::TransactionKind::Cashu,
+                amount,
+                fee: total_send_fee,
+                unit: self.wallet.unit.clone(),
+                ys: final_proofs_to_send.ys()?,
+                token: token.to_string(),
+                status: cdk_common::wallet::TransactionStatus::Pending,
+                timestamp: unix_time(),
+                memo: token_memo,
+                metadata: options.metadata.clone(),
+                quote_id: None,
+                payment_request: None,
+                payment_proof: None,
+                payment_method: None,
+                saga_id: Some(operation_id),
+            };
+            self.wallet.localstore.add_transaction(tx.clone()).await?;
 
             let mut saga = self.state_data.saga.clone();
             saga.data = OperationData::Send(SendOperationData {
@@ -538,12 +539,12 @@ impl<'a> SendSaga<'a, Prepared> {
                 return Err(Error::ConcurrentUpdate);
             }
 
-            Ok((token, final_proofs_to_send, saga))
+            Ok((token, tx, final_proofs_to_send, saga))
         }
         .await;
 
         match logic_res {
-            Ok((token, final_proofs_to_send, saga)) => {
+            Ok((token, tx, final_proofs_to_send, saga)) => {
                 let send_saga = SendSaga {
                     wallet: self.wallet,
                     compensations: self.compensations,
@@ -554,7 +555,7 @@ impl<'a> SendSaga<'a, Prepared> {
                     },
                 };
 
-                Ok((token, send_saga))
+                Ok((token, tx, send_saga))
             }
             Err(e) => {
                 if e.is_definitive_failure() {

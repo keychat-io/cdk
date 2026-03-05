@@ -47,9 +47,11 @@ pub struct Prepared {
 }
 
 /// Finalized state - receive operation completed successfully.
-/// The received amount can be retrieved from this state.
+/// The received amount and transaction can be retrieved from this state.
 #[derive(Debug)]
 pub struct Finalized {
     /// Total amount received (after fees)
     pub amount: Amount,
+    /// The transaction record
+    pub transaction: cdk_common::wallet::Transaction,
 }

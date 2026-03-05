@@ -460,10 +460,13 @@ impl<'a> MintSaga<'a, Prepared> {
                 .add_transaction(Transaction {
                     mint_url: wallet.mint_url.clone(),
                     direction: TransactionDirection::Incoming,
+                    kind: cdk_common::wallet::TransactionKind::LN,
                     amount: minted_amount,
                     fee: Amount::ZERO,
                     unit: wallet.unit.clone(),
                     ys: proofs.ys()?,
+                    token: quote_info.request.clone(),
+                    status: cdk_common::wallet::TransactionStatus::Success,
                     timestamp: unix_time(),
                     memo: None,
                     metadata: HashMap::new(),

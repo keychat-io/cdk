@@ -1,15 +1,21 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::str::FromStr;
 
 use cdk_common::amount::KeysetFeeAndAmounts;
-use cdk_common::wallet::ProofInfo;
-use cdk_common::Id;
+use cdk_common::util::unix_time;
+use cdk_common::wallet::{
+    ProofInfo, Transaction, TransactionDirection, TransactionId, TransactionKind, TransactionStatus,
+};
+use cdk_common::{Bolt11Invoice, Id, MeltQuoteState, MintQuoteState};
 use tracing::instrument;
 
+use crate::amount::SplitTarget;
 use crate::fees::calculate_fee;
 use crate::nuts::nut00::ProofsMethods;
 use crate::nuts::{
     CheckStateRequest, Proof, ProofState, Proofs, PublicKey, SpendingConditions, State,
 };
+use crate::wallet::receive::ReceiveOptions;
 use crate::{ensure_cdk, Amount, Error, Wallet};
 
 impl Wallet {
@@ -37,6 +43,35 @@ impl Wallet {
     pub async fn get_pending_spent_proofs(&self) -> Result<Proofs, Error> {
         self.get_proofs_with(Some(vec![State::PendingSpent]), None)
             .await
+    }
+
+    /// Get spent [`Proofs`]
+    #[instrument(skip(self))]
+    pub async fn get_spent_proofs(&self) -> Result<Proofs, Error> {
+        self.get_proofs_with(Some(vec![State::Spent]), None).await
+    }
+
+    /// Get Pending and PendingSpent [`Proofs`]
+    #[instrument(skip(self))]
+    pub async fn get_all_pending_proofs(&self) -> Result<Proofs, Error> {
+        self.get_proofs_with(Some(vec![State::Pending, State::PendingSpent]), None)
+            .await
+    }
+
+    /// Get all [`Proofs`] regardless of state
+    #[instrument(skip(self))]
+    pub async fn get_all_proofs(&self) -> Result<Proofs, Error> {
+        self.get_proofs_with(
+            Some(vec![
+                State::Spent,
+                State::Unspent,
+                State::Pending,
+                State::PendingSpent,
+                State::Reserved,
+            ]),
+            None,
+        )
+        .await
     }
 
     /// Get this wallet's [Proofs] that match the args
@@ -88,6 +123,472 @@ impl Wallet {
         self.localstore.update_proofs(vec![], spent_ys).await?;
 
         Ok(spendable.states)
+    }
+
+    /// Checks all proofs against the mint to reconcile local and remote states
+    #[instrument(skip(self))]
+    pub async fn check_proofs_from_mint(&self) -> Result<(), Error> {
+        let proofs = self
+            .localstore
+            .get_proofs(
+                Some(self.mint_url.clone()),
+                Some(self.unit.clone()),
+                Some(vec![
+                    State::Spent,
+                    State::Unspent,
+                    State::Pending,
+                    State::Reserved,
+                    State::PendingSpent,
+                ]),
+                None,
+            )
+            .await?;
+        if proofs.is_empty() {
+            return Ok(());
+        }
+
+        let spendable = self
+            .client
+            .post_check_state(CheckStateRequest {
+                ys: proofs
+                    .clone()
+                    .into_iter()
+                    .map(|p| p.proof)
+                    .collect::<Vec<_>>()
+                    .ys()?,
+            })
+            .await?;
+
+        let states = spendable.states;
+
+        let server_state_map: HashMap<PublicKey, State> =
+            states.iter().map(|s| (s.y, s.state)).collect();
+
+        let mut mismatches: Vec<(PublicKey, State, State)> = Vec::new();
+        let mut missing_on_server: Vec<PublicKey> = Vec::new();
+
+        let mut to_pending: Vec<PublicKey> = Vec::new();
+        for p in proofs.iter() {
+            if let Some(remote) = server_state_map.get(&p.y) {
+                if *remote == p.state {
+                    continue;
+                }
+                mismatches.push((p.y, p.state, *remote));
+            } else {
+                missing_on_server.push(p.y);
+            }
+        }
+        if !mismatches.is_empty() {
+            for (y, local, remote) in &mismatches {
+                tracing::warn!(
+                    "proof state mismatch y={:?} local={:?} remote={:?}",
+                    y,
+                    local,
+                    remote
+                );
+            }
+        }
+        if !missing_on_server.is_empty() {
+            tracing::warn!(
+                "server did not return {} local ys; example: {:?}",
+                missing_on_server.len(),
+                missing_on_server.first()
+            );
+        }
+
+        for (_y, local, remote) in &mismatches {
+            match remote {
+                State::Pending => {
+                    if *local == State::Unspent {
+                        to_pending.push(*_y);
+                    }
+                }
+                _ => {}
+            }
+        }
+        tracing::warn!("To pending: {}", to_pending.len());
+
+        if !to_pending.is_empty() {
+            self.localstore
+                .update_proofs_state(to_pending, State::Pending)
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    /// Check a failed transaction by ID and attempt recovery
+    #[instrument(skip(self))]
+    pub async fn check_failed_transaction(&self, tx_id: String) -> Result<Transaction, Error> {
+        let tx_id = TransactionId::from_str(&tx_id)?;
+        let tx = self.localstore.get_transaction(tx_id.clone()).await?;
+        if tx.is_none() {
+            return Err(Error::TransactionNotFound);
+        }
+        let mut tx = tx.unwrap();
+        if tx.status == TransactionStatus::Success {
+            return Ok(tx);
+        }
+        if tx.status != TransactionStatus::Failed {
+            tracing::warn!("Transaction is not failed, current status: {:?}", tx.status);
+            return Ok(tx);
+        }
+        if tx.kind == TransactionKind::Cashu {
+            if tx.direction == TransactionDirection::Incoming {
+                let re = self.receive(&tx.token, ReceiveOptions::default()).await;
+                match re {
+                    Ok(_) => {
+                        self.localstore.remove_transaction(tx_id.clone()).await?;
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to receive tokens again: {:?}", e);
+                        if e.to_string().contains("Token Already Spent") {
+                            tx.status = TransactionStatus::Success;
+                            self.localstore.add_transaction(tx.clone()).await?;
+                            return Err(Error::Custom(
+                                "Check transaction of receive error Token Already Spent"
+                                    .to_string(),
+                            ));
+                        }
+                        self.check_proofs_from_mint().await?;
+                        self.restore().await?;
+                    }
+                }
+            } else if tx.direction == TransactionDirection::Outgoing {
+                let re = self.restore().await;
+                match re {
+                    Ok(_) => {
+                        tracing::info!("Proofs restored successfully");
+                        tx.status = TransactionStatus::Success;
+                        self.localstore.add_transaction(tx.clone()).await?;
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to restore proofs: {:?}", e);
+                        return Err(Error::Custom(
+                            "Check transaction of restore proofs failed for [Outgoing]".to_string(),
+                        ));
+                    }
+                }
+            } else if tx.direction == TransactionDirection::Split {
+                let re = self.restore().await;
+                match re {
+                    Ok(_) => {
+                        tracing::info!("Proofs restored successfully, and delete the tx");
+                        self.localstore.remove_transaction(tx.clone().id()).await?;
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to restore proofs: {:?}", e);
+                        return Err(Error::Custom(
+                            "Check transaction of restore proofs failed for [Split]".to_string(),
+                        ));
+                    }
+                }
+            }
+        } else if tx.kind == TransactionKind::LN {
+            if tx.direction == TransactionDirection::Incoming {
+                if let Some(quote_id) = tx.metadata.get("quote_id") {
+                    let mint_quote = self.localstore.get_mint_quote(quote_id).await?;
+                    let mint_quote_response = self.check_mint_quote_status(quote_id).await?;
+
+                    match mint_quote_response.state {
+                        MintQuoteState::Paid | MintQuoteState::Issued => {
+                            let res = self.mint(quote_id, SplitTarget::default(), None).await;
+                            match res {
+                                Ok(_proofs) => {
+                                    tx.status = TransactionStatus::Success;
+                                    self.localstore.add_transaction(tx.clone()).await?;
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to mint tokens again: {:?}", e);
+                                    let re = self.restore().await;
+                                    match re {
+                                        Ok(_) => {
+                                            tracing::info!("Proofs restored successfully");
+                                            tx.status = TransactionStatus::Success;
+                                            self.localstore.add_transaction(tx.clone()).await?;
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("Failed to restore proofs: {:?}", e);
+                                            return Err(Error::Custom(
+                                                "Check transaction of restore proofs failed"
+                                                    .to_string(),
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {
+                            if let Some(mint_quote) = mint_quote {
+                                if mint_quote.expiry.le(&unix_time()) {
+                                    tx.status = TransactionStatus::Expired;
+                                    self.localstore.add_transaction(tx.clone()).await?;
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if tx.direction == TransactionDirection::Outgoing {
+                if let Some(quote_id) = tx.metadata.get("quote_id") {
+                    let melt_quote = self.localstore.get_melt_quote(quote_id).await?;
+                    let melt_quote_response = self.check_melt_quote_status(quote_id).await?;
+                    match melt_quote_response.state {
+                        MeltQuoteState::Paid => {
+                            tx.status = TransactionStatus::Success;
+                            self.localstore.add_transaction(tx.clone()).await?;
+                            return Err(Error::Custom("The invoice has already paid".to_string()));
+                        }
+                        _ => {
+                            if let Some(melt_quote) = melt_quote {
+                                if melt_quote.expiry.le(&unix_time()) {
+                                    tx.status = TransactionStatus::Expired;
+                                    self.localstore.add_transaction(tx.clone()).await?;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(tx)
+    }
+
+    /// Check pending transaction state by transaction ID
+    #[instrument(skip(self))]
+    pub async fn check_pending_transaction_state(
+        &self,
+        tx_id: String,
+    ) -> Result<Transaction, Error> {
+        let tx_id = TransactionId::from_str(&tx_id)?;
+        let tx = self.localstore.get_transaction(tx_id.clone()).await?;
+        if tx.is_none() {
+            return Err(Error::TransactionNotFound);
+        }
+        let mut tx = tx.unwrap();
+        if tx.status == TransactionStatus::Success {
+            tracing::info!("Transaction already successful");
+            return Ok(tx);
+        }
+        if tx.status != TransactionStatus::Pending {
+            tracing::warn!(
+                "Transaction is not pending, current status: {:?}",
+                tx.status
+            );
+            return Ok(tx);
+        }
+        if tx.kind == TransactionKind::Cashu {
+            if tx.direction == TransactionDirection::Outgoing {
+                let spendable = self
+                    .client
+                    .post_check_state(CheckStateRequest { ys: tx.ys.clone() })
+                    .await?;
+
+                let states = spendable.states;
+                let proofs = self
+                    .localstore
+                    .get_proofs(
+                        Some(self.mint_url.clone()),
+                        Some(self.unit.clone()),
+                        Some(vec![State::Pending, State::Reserved, State::PendingSpent]),
+                        None,
+                    )
+                    .await?;
+
+                let spent_states: HashSet<PublicKey> = states
+                    .into_iter()
+                    .filter(|s| s.state.eq(&State::Spent))
+                    .map(|s| s.y)
+                    .collect();
+
+                let (spent_proofs, _non_spent_proofs): (Vec<ProofInfo>, Vec<ProofInfo>) = proofs
+                    .into_iter()
+                    .partition(|p| spent_states.contains(&p.y));
+
+                let is_spent = spent_proofs.iter().any(|p| match p.proof.y() {
+                    Ok(y) => tx.ys.contains(&y),
+                    Err(_) => false,
+                });
+                if is_spent {
+                    tx.status = TransactionStatus::Success;
+                    self.localstore.add_transaction(tx.clone()).await?;
+                    let spent_ys: Vec<PublicKey> = spent_proofs.into_iter().map(|p| p.y).collect();
+                    self.localstore.update_proofs(vec![], spent_ys).await?;
+                }
+            }
+        } else if tx.kind == TransactionKind::LN {
+            let invoice: Bolt11Invoice = tx.token.parse()?;
+            if invoice.is_expired() {
+                tx.status = TransactionStatus::Expired;
+                self.localstore.add_transaction(tx.clone()).await?;
+                return Ok(tx);
+            }
+            if tx.direction == TransactionDirection::Incoming {
+                if let Some(quote_id) = tx.metadata.get("quote_id") {
+                    let mint_quote = self.localstore.get_mint_quote(quote_id).await?;
+                    let mint_quote_response = self.check_mint_quote_status(quote_id).await?;
+                    match mint_quote_response.state {
+                        MintQuoteState::Paid | MintQuoteState::Issued => {
+                            let res = self.mint(quote_id, SplitTarget::default(), None).await;
+                            match res {
+                                Ok(_proofs) => {
+                                    tx.status = TransactionStatus::Success;
+                                    self.localstore.add_transaction(tx.clone()).await?;
+                                }
+                                Err(_e) => {}
+                            }
+                        }
+                        _ => {
+                            if let Some(mint_quote) = mint_quote {
+                                if mint_quote.expiry.le(&unix_time()) {
+                                    tx.status = TransactionStatus::Expired;
+                                    self.localstore.add_transaction(tx.clone()).await?;
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if tx.direction == TransactionDirection::Outgoing {
+                if let Some(quote_id) = tx.metadata.get("quote_id") {
+                    let melt_quote = self.localstore.get_melt_quote(quote_id).await?;
+                    let melt_quote_response = self.check_melt_quote_status(quote_id).await?;
+                    match melt_quote_response.state {
+                        MeltQuoteState::Paid => {
+                            tx.status = TransactionStatus::Success;
+                            self.localstore.add_transaction(tx.clone()).await?;
+                        }
+                        _ => {
+                            if let Some(melt_quote) = melt_quote {
+                                if melt_quote.expiry.le(&unix_time()) {
+                                    tx.status = TransactionStatus::Expired;
+                                    self.localstore.add_transaction(tx.clone()).await?;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(tx)
+    }
+
+    /// Check all pending transactions state
+    #[instrument(skip(self))]
+    pub async fn check_pending_transactions_state(&self) -> Result<(u64, u64), Error> {
+        let mut update_count = 0;
+        let pending_txs = self.list_pending_transactions().await?;
+        let mut cushs: BTreeMap<String, Vec<Transaction>> = BTreeMap::new();
+        let mut lns: BTreeMap<String, Vec<Transaction>> = BTreeMap::new();
+        for tx in pending_txs {
+            if tx.kind == TransactionKind::Cashu {
+                let txs = cushs.entry(tx.mint_url.to_string()).or_default();
+                txs.push(tx);
+            } else if tx.kind == TransactionKind::LN {
+                let txs = lns.entry(tx.mint_url.to_string()).or_default();
+                txs.push(tx);
+            }
+        }
+
+        for txs in lns.values_mut() {
+            for tx in txs.iter_mut() {
+                let invoice: Bolt11Invoice = tx.token.parse()?;
+                if invoice.is_expired() {
+                    tx.status = TransactionStatus::Expired;
+                    self.localstore.add_transaction(tx.clone()).await?;
+                    continue;
+                }
+                if let Some(quote_id) = tx.metadata.get("quote_id") {
+                    let mint_quote = self.localstore.get_mint_quote(quote_id).await?;
+                    let mint_quote_response = self.check_mint_quote_status(quote_id).await?;
+
+                    match mint_quote_response.state {
+                        MintQuoteState::Paid => {
+                            if let Ok(_proofs) =
+                                self.mint(quote_id, SplitTarget::default(), None).await
+                            {
+                                tx.status = TransactionStatus::Success;
+                                self.localstore.add_transaction(tx.clone()).await?;
+                                update_count += 1;
+                            }
+                        }
+                        _ => {
+                            if let Some(mint_quote) = mint_quote {
+                                if mint_quote.expiry.le(&unix_time()) {
+                                    tx.status = TransactionStatus::Expired;
+                                    self.localstore.add_transaction(tx.clone()).await?;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let proofs = self
+            .localstore
+            .get_proofs(
+                Some(self.mint_url.clone()),
+                Some(self.unit.clone()),
+                Some(vec![State::Pending, State::Reserved, State::PendingSpent]),
+                None,
+            )
+            .await?;
+        let pendings_count = proofs.len() as u64;
+        if pendings_count == 0 {
+            return Ok((update_count, pendings_count));
+        }
+        let ps: Vec<Proof> = proofs.clone().into_iter().map(|p| p.proof).collect();
+        let spendable = self
+            .client
+            .post_check_state(CheckStateRequest { ys: ps.ys()? })
+            .await?;
+
+        let states = spendable.states;
+        let spent_states: HashSet<PublicKey> = states
+            .clone()
+            .into_iter()
+            .filter(|s| s.state.eq(&State::Spent))
+            .map(|s| s.y)
+            .collect();
+
+        let (spent_proofs, _non_spent_proofs): (Vec<ProofInfo>, Vec<ProofInfo>) = proofs
+            .clone()
+            .into_iter()
+            .partition(|p| spent_states.contains(&p.y));
+
+        for txs in cushs.values_mut() {
+            for tx in txs.iter_mut() {
+                let is_spent = spent_proofs.iter().any(|p| match p.proof.y() {
+                    Ok(y) => tx.ys.contains(&y),
+                    Err(_) => false,
+                });
+                if is_spent {
+                    update_count += 1;
+                    tx.status = TransactionStatus::Success;
+                    self.localstore.add_transaction(tx.clone()).await?;
+                }
+            }
+        }
+        let spent_ys: Vec<PublicKey> = spent_proofs.into_iter().map(|p| p.y).collect();
+
+        let pending_states: HashSet<PublicKey> = states
+            .into_iter()
+            .filter(|s| s.state.ne(&State::Spent))
+            .map(|s| s.y)
+            .collect();
+
+        let (_pending_proofs, non_pending_proofs): (Vec<ProofInfo>, Vec<ProofInfo>) = proofs
+            .into_iter()
+            .partition(|p| pending_states.contains(&p.y));
+
+        let non_pending_ys: Vec<PublicKey> = non_pending_proofs.into_iter().map(|p| p.y).collect();
+
+        let mut delete_set: HashSet<PublicKey> = spent_ys.into_iter().collect();
+        delete_set.extend(non_pending_ys);
+        let delete_all: Vec<PublicKey> = delete_set.into_iter().collect();
+
+        self.localstore.update_proofs(vec![], delete_all).await?;
+
+        Ok((update_count, pendings_count))
     }
 
     /// Checks pending proofs for spent status and marks spent proofs accordingly.

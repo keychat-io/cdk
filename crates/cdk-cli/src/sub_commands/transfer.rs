@@ -144,11 +144,11 @@ pub async fn transfer(
         let prepared = source_wallet
             .prepare_send(source_balance, Default::default())
             .await?;
-        let token = prepared.confirm(None).await?;
+        let send_tx = prepared.confirm(None).await?;
 
         // Receive at target
-        let received = target_wallet
-            .receive(&token.to_string(), Default::default())
+        let recv_tx = target_wallet
+            .receive(&send_tx.token, Default::default())
             .await?;
 
         let source_balance_after = source_wallet.total_balance().await?;
@@ -156,8 +156,8 @@ pub async fn transfer(
 
         println!("\nTransfer completed successfully!");
         println!("Amount sent: {} {}", source_balance, unit);
-        println!("Amount received: {} {}", received, unit);
-        let fees_paid = source_balance - received;
+        println!("Amount received: {} {}", recv_tx.amount, unit);
+        let fees_paid = source_balance - recv_tx.amount;
         if fees_paid > Amount::ZERO {
             println!("Fees paid: {} {}", fees_paid, unit);
         }
@@ -198,11 +198,11 @@ pub async fn transfer(
         let prepared = source_wallet
             .prepare_send(amount, Default::default())
             .await?;
-        let token = prepared.confirm(None).await?;
+        let send_tx = prepared.confirm(None).await?;
 
         // Receive at target
-        let received = target_wallet
-            .receive(&token.to_string(), Default::default())
+        let recv_tx = target_wallet
+            .receive(&send_tx.token, Default::default())
             .await?;
 
         let source_balance_after = source_wallet.total_balance().await?;
@@ -210,8 +210,8 @@ pub async fn transfer(
 
         println!("\nTransfer completed successfully!");
         println!("Amount sent: {} {}", amount, unit);
-        println!("Amount received: {} {}", received, unit);
-        let fees_paid = amount - received;
+        println!("Amount received: {} {}", recv_tx.amount, unit);
+        let fees_paid = amount - recv_tx.amount;
         if fees_paid > Amount::ZERO {
             println!("Fees paid: {} {}", fees_paid, unit);
         }

@@ -11,7 +11,8 @@ use cdk_common::mint_url::MintUrl;
 use cdk_common::nuts::{MeltQuoteState, MintQuoteState};
 use cdk_common::secret::Secret;
 use cdk_common::wallet::{
-    self, MintQuote, ProofInfo, Transaction, TransactionDirection, TransactionId,
+    self, MintQuote, ProofInfo, Transaction, TransactionDirection, TransactionId, TransactionKind,
+    TransactionStatus,
 };
 use cdk_common::{
     database, Amount, CurrencyUnit, Id, KeySet, KeySetInfo, Keys, MintInfo, PaymentMethod, Proof,
@@ -611,10 +612,13 @@ where
             SELECT
                 mint_url,
                 direction,
+                kind,
                 unit,
                 amount,
                 fee,
                 ys,
+                token,
+                status,
                 timestamp,
                 memo,
                 metadata,
@@ -650,10 +654,13 @@ where
             SELECT
                 mint_url,
                 direction,
+                kind,
                 unit,
                 amount,
                 fee,
                 ys,
+                token,
+                status,
                 timestamp,
                 memo,
                 metadata,
@@ -792,6 +799,7 @@ where
 
         let mint_url = transaction.mint_url.to_string();
         let direction = transaction.direction.to_string();
+        let kind = transaction.kind.to_string();
         let unit = transaction.unit.to_string();
         let amount = u64::from(transaction.amount) as i64;
         let fee = u64::from(transaction.fee) as i64;
@@ -800,21 +808,27 @@ where
             .iter()
             .flat_map(|y| y.to_bytes().to_vec())
             .collect::<Vec<_>>();
+        let token = transaction.token.clone();
+        let status = transaction.status.to_string();
 
         let id = transaction.id();
 
         query(
                r#"
    INSERT INTO transactions
-   (id, mint_url, direction, unit, amount, fee, ys, timestamp, memo, metadata, quote_id, payment_request, payment_proof, payment_method, saga_id)
+   (id, mint_url, direction, kind, unit, amount, fee, ys, token, status, timestamp, memo, metadata, quote_id, payment_request, payment_proof, payment_method, saga_id)
    VALUES
-   (:id, :mint_url, :direction, :unit, :amount, :fee, :ys, :timestamp, :memo, :metadata, :quote_id, :payment_request, :payment_proof, :payment_method, :saga_id)
+   (:id, :mint_url, :direction, :kind, :unit, :amount, :fee, :ys, :token, :status, :timestamp, :memo, :metadata, :quote_id, :payment_request, :payment_proof, :payment_method, :saga_id)
    ON CONFLICT(id) DO UPDATE SET
        mint_url = excluded.mint_url,
        direction = excluded.direction,
+       kind = excluded.kind,
        unit = excluded.unit,
        amount = excluded.amount,
        fee = excluded.fee,
+       ys = excluded.ys,
+       token = excluded.token,
+       status = excluded.status,
        timestamp = excluded.timestamp,
        memo = excluded.memo,
        metadata = excluded.metadata,
@@ -829,10 +843,13 @@ where
            .bind("id", id.as_slice().to_vec())
            .bind("mint_url", mint_url)
            .bind("direction", direction)
+           .bind("kind", kind)
            .bind("unit", unit)
            .bind("amount", amount)
            .bind("fee", fee)
            .bind("ys", ys)
+           .bind("token", token)
+           .bind("status", status)
            .bind("timestamp", transaction.timestamp as i64)
            .bind("memo", transaction.memo)
            .bind(
@@ -1223,6 +1240,144 @@ where
     }
 
     #[instrument(skip(self))]
+    #[instrument(skip(self))]
+    async fn list_transactions_with_status(
+        &self,
+        mint_url: Option<MintUrl>,
+        direction: Option<TransactionDirection>,
+        unit: Option<CurrencyUnit>,
+        status: TransactionStatus,
+    ) -> Result<Vec<Transaction>, database::Error> {
+        let conn = self.pool.get().map_err(|e| Error::Database(Box::new(e)))?;
+
+        Ok(query(
+            r#"
+            SELECT
+                mint_url, direction, kind, unit, amount, fee, ys,
+                token, status, timestamp, memo, metadata,
+                quote_id, payment_request, payment_proof, payment_method, saga_id
+            FROM transactions
+            WHERE status = :status
+            "#,
+        )?
+        .bind("status", status.to_string())
+        .fetch_all(&*conn)
+        .await?
+        .into_iter()
+        .filter_map(|row| {
+            let transaction = sql_row_to_transaction(row).ok()?;
+            if transaction.matches_conditions(&mint_url, &direction, &unit) {
+                Some(transaction)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>())
+    }
+
+    #[instrument(skip(self))]
+    async fn list_transactions_with_kind_offset(
+        &self,
+        offset: usize,
+        limit: usize,
+        kinds: &[TransactionKind],
+        mint_url: Option<MintUrl>,
+        direction: Option<TransactionDirection>,
+        unit: Option<CurrencyUnit>,
+    ) -> Result<Vec<Transaction>, database::Error> {
+        let conn = self.pool.get().map_err(|e| Error::Database(Box::new(e)))?;
+
+        Ok(query(
+            r#"
+            SELECT
+                mint_url, direction, kind, unit, amount, fee, ys,
+                token, status, timestamp, memo, metadata,
+                quote_id, payment_request, payment_proof, payment_method, saga_id
+            FROM transactions
+            WHERE kind IN (:kinds)
+            ORDER BY timestamp DESC
+            LIMIT :l OFFSET :o
+            "#,
+        )?
+        .bind_vec(
+            "kinds",
+            kinds.iter().map(|k| k.to_string()).collect::<Vec<_>>(),
+        )
+        .bind("l", limit as i64)
+        .bind("o", offset as i64)
+        .fetch_all(&*conn)
+        .await?
+        .into_iter()
+        .filter_map(|row| {
+            let transaction = sql_row_to_transaction(row).ok()?;
+            if transaction.matches_conditions(&mint_url, &direction, &unit) {
+                Some(transaction)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>())
+    }
+
+    #[instrument(skip(self))]
+    async fn list_transactions_with_kind_amount_offset(
+        &self,
+        offset: usize,
+        limit: usize,
+        kinds: &[TransactionKind],
+        mint_url: Option<MintUrl>,
+        direction: Option<TransactionDirection>,
+        unit: Option<CurrencyUnit>,
+        amount: Option<i64>,
+    ) -> Result<Vec<Transaction>, database::Error> {
+        let conn = self.pool.get().map_err(|e| Error::Database(Box::new(e)))?;
+
+        let (amount_sql, amount_bind) = match amount {
+            None => ("", None),
+            Some(v) if v == -1 => (" AND amount != 1", None),
+            Some(v) => (" AND amount = :amount", Some(v)),
+        };
+
+        let sql = format!(
+            r#"
+            SELECT
+                mint_url, direction, kind, unit, amount, fee, ys,
+                token, status, timestamp, memo, metadata,
+                quote_id, payment_request, payment_proof, payment_method, saga_id
+            FROM transactions
+            WHERE kind IN (:kinds) {amount_sql}
+            ORDER BY timestamp DESC
+            LIMIT :l OFFSET :o
+            "#
+        );
+
+        let mut stmt = query(&sql)?
+            .bind_vec(
+                "kinds",
+                kinds.iter().map(|k| k.to_string()).collect::<Vec<_>>(),
+            )
+            .bind("l", limit as i64)
+            .bind("o", offset as i64);
+
+        if let Some(v) = amount_bind {
+            stmt = stmt.bind("amount", v);
+        }
+
+        Ok(stmt
+            .fetch_all(&*conn)
+            .await?
+            .into_iter()
+            .filter_map(|row| {
+                let transaction = sql_row_to_transaction(row).ok()?;
+                if transaction.matches_conditions(&mint_url, &direction, &unit) {
+                    Some(transaction)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>())
+    }
+
     async fn remove_transaction(
         &self,
         transaction_id: TransactionId,
@@ -1231,6 +1386,18 @@ where
 
         query(r#"DELETE FROM transactions WHERE id=:id"#)?
             .bind("id", transaction_id.as_slice().to_vec())
+            .execute(&*conn)
+            .await?;
+
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    async fn remove_transactions(&self, unix_timestamp_le: u64) -> Result<(), database::Error> {
+        let conn = self.pool.get().map_err(|e| Error::Database(Box::new(e)))?;
+
+        query(r#"DELETE FROM transactions WHERE timestamp <= :ts"#)?
+            .bind("ts", unix_timestamp_le as i64)
             .execute(&*conn)
             .await?;
 
@@ -1917,10 +2084,13 @@ fn sql_row_to_transaction(row: Vec<Column>) -> Result<Transaction, Error> {
         let (
             mint_url,
             direction,
+            kind,
             unit,
             amount,
             fee,
             ys,
+            token,
+            status,
             timestamp,
             memo,
             metadata,
@@ -1942,6 +2112,7 @@ fn sql_row_to_transaction(row: Vec<Column>) -> Result<Transaction, Error> {
     Ok(Transaction {
         mint_url: column_as_string!(mint_url, MintUrl::from_str),
         direction: column_as_string!(direction, TransactionDirection::from_str),
+        kind: column_as_string!(kind, TransactionKind::from_str),
         unit: column_as_string!(unit, CurrencyUnit::from_str),
         amount: Amount::from(amount),
         fee: Amount::from(fee),
@@ -1949,6 +2120,8 @@ fn sql_row_to_transaction(row: Vec<Column>) -> Result<Transaction, Error> {
             .chunks(33)
             .map(PublicKey::from_slice)
             .collect::<Result<Vec<_>, _>>()?,
+        token: column_as_nullable_string!(token).unwrap_or_default(),
+        status: column_as_string!(status, TransactionStatus::from_str),
         timestamp: column_as_number!(timestamp),
         memo: column_as_nullable_string!(memo),
         metadata: column_as_nullable_string!(metadata, |v| serde_json::from_str(&v).ok(), |v| {

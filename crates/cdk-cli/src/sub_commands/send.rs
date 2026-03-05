@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use anyhow::{anyhow, Result};
 use cdk::mint_url::MintUrl;
-use cdk::nuts::{Conditions, CurrencyUnit, PublicKey, SpendingConditions};
+use cdk::nuts::{Conditions, CurrencyUnit, PublicKey, SpendingConditions, Token};
 use cdk::wallet::types::SendKind;
 use cdk::wallet::{SendMemo, SendOptions, WalletRepository};
 use cdk::Amount;
@@ -253,7 +253,8 @@ pub async fn send(
         .prepare_send(token_amount, send_options.clone())
         .await?;
     let memo = send_options.memo;
-    let token = prepared.confirm(memo).await?;
+    let tx = prepared.confirm(memo).await?;
+    let token = Token::from_str(&tx.token)?;
 
     match sub_command_args.v3 {
         true => {

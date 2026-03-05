@@ -12,7 +12,8 @@ use cdk_common::mint_url::MintUrl;
 use cdk_common::nut00::KnownMethod;
 use cdk_common::util::unix_time;
 use cdk_common::wallet::{
-    self, MintQuote, ProofInfo, Transaction, TransactionDirection, TransactionId,
+    self, MintQuote, ProofInfo, Transaction, TransactionDirection, TransactionId, TransactionKind,
+    TransactionStatus,
 };
 use cdk_common::{
     database, Amount, CurrencyUnit, Id, KeySet, KeySetInfo, Keys, MintInfo, PaymentMethod,
@@ -974,6 +975,86 @@ impl WalletDatabase<database::Error> for WalletRedbDatabase {
     }
 
     #[instrument(skip(self))]
+    async fn list_transactions_with_status(
+        &self,
+        mint_url: Option<MintUrl>,
+        direction: Option<TransactionDirection>,
+        unit: Option<CurrencyUnit>,
+        status: TransactionStatus,
+    ) -> Result<Vec<Transaction>, database::Error> {
+        let read_txn = self.db.begin_read().map_err(Error::from)?;
+        let table = read_txn
+            .open_table(TRANSACTIONS_TABLE)
+            .map_err(Error::from)?;
+
+        let transactions: Vec<Transaction> = table
+            .iter()
+            .map_err(Error::from)?
+            .flatten()
+            .filter_map(|(_k, v)| {
+                let tx = serde_json::from_str::<Transaction>(v.value()).ok()?;
+                if tx.matches_conditions(&mint_url, &direction, &unit) && tx.status == status {
+                    Some(tx)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        Ok(transactions)
+    }
+
+    #[instrument(skip(self))]
+    async fn list_transactions_with_kind_offset(
+        &self,
+        offset: usize,
+        limit: usize,
+        kind: &[TransactionKind],
+        mint_url: Option<MintUrl>,
+        direction: Option<TransactionDirection>,
+        unit: Option<CurrencyUnit>,
+    ) -> Result<Vec<Transaction>, database::Error> {
+        let all = self.list_transactions(mint_url, direction, unit).await?;
+        let filtered: Vec<_> = all
+            .into_iter()
+            .filter(|tx| kind.contains(&tx.kind))
+            .skip(offset)
+            .take(limit)
+            .collect();
+        Ok(filtered)
+    }
+
+    #[instrument(skip(self))]
+    async fn list_transactions_with_kind_amount_offset(
+        &self,
+        offset: usize,
+        limit: usize,
+        kind: &[TransactionKind],
+        mint_url: Option<MintUrl>,
+        direction: Option<TransactionDirection>,
+        unit: Option<CurrencyUnit>,
+        amount: Option<i64>,
+    ) -> Result<Vec<Transaction>, database::Error> {
+        let all = self.list_transactions(mint_url, direction, unit).await?;
+        let filtered: Vec<_> = all
+            .into_iter()
+            .filter(|tx| {
+                if !kind.contains(&tx.kind) {
+                    return false;
+                }
+                match amount {
+                    None => true,
+                    Some(-1) => u64::from(tx.amount) != 1,
+                    Some(v) => u64::from(tx.amount) == v as u64,
+                }
+            })
+            .skip(offset)
+            .take(limit)
+            .collect();
+        Ok(filtered)
+    }
+
+    #[instrument(skip(self))]
     async fn remove_transaction(
         &self,
         transaction_id: TransactionId,
@@ -986,6 +1067,35 @@ impl WalletDatabase<database::Error> for WalletRedbDatabase {
             table
                 .remove(transaction_id.as_slice())
                 .map_err(Error::from)?;
+        }
+        write_txn.commit().map_err(Error::from)?;
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    async fn remove_transactions(&self, unix_timestamp_le: u64) -> Result<(), database::Error> {
+        let write_txn = self.db.begin_write().map_err(Error::from)?;
+        {
+            let mut table = write_txn
+                .open_table(TRANSACTIONS_TABLE)
+                .map_err(Error::from)?;
+            let keys_to_remove: Vec<Vec<u8>> = table
+                .iter()
+                .map_err(Error::from)?
+                .filter_map(|entry| {
+                    let (key, value) = entry.ok()?;
+                    let tx: Transaction = serde_json::from_str(value.value()).ok()?;
+                    if tx.timestamp <= unix_timestamp_le {
+                        Some(key.value().to_vec())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            for key in keys_to_remove {
+                table.remove(key.as_slice()).map_err(Error::from)?;
+            }
         }
         write_txn.commit().map_err(Error::from)?;
         Ok(())

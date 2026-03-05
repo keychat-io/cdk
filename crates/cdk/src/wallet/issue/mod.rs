@@ -4,9 +4,12 @@
 
 pub(crate) mod saga;
 
+use std::collections::HashMap;
+
 use cdk_common::nut00::KnownMethod;
 use cdk_common::nut04::MintMethodOptions;
 use cdk_common::nut25::MintQuoteBolt12Request;
+use cdk_common::wallet::{Transaction, TransactionDirection, TransactionKind, TransactionStatus};
 use cdk_common::PaymentMethod;
 pub(crate) use saga::MintSaga;
 use tracing::instrument;
@@ -29,7 +32,7 @@ impl Wallet {
         amount: Option<Amount>,
         description: Option<String>,
         extra: Option<String>,
-    ) -> Result<MintQuote, Error>
+    ) -> Result<(MintQuote, Transaction), Error>
     where
         T: Into<PaymentMethod>,
     {
@@ -57,7 +60,7 @@ impl Wallet {
 
         let secret_key = SecretKey::generate();
 
-        let (quote_id, request_str, expiry) = match &method {
+        let (quote_id, request_str, expiry, resp_pubkey) = match &method {
             PaymentMethod::Known(KnownMethod::Bolt11) => {
                 let amount = amount.ok_or(Error::AmountUndefined)?;
                 let request = MintQuoteBolt11Request {
@@ -68,7 +71,12 @@ impl Wallet {
                 };
 
                 let response = self.client.post_mint_quote(request).await?;
-                (response.quote, response.request, response.expiry)
+                (
+                    response.quote,
+                    response.request,
+                    response.expiry,
+                    response.pubkey,
+                )
             }
             PaymentMethod::Known(KnownMethod::Bolt12) => {
                 let request = MintQuoteBolt12Request {
@@ -79,7 +87,12 @@ impl Wallet {
                 };
 
                 let response = self.client.post_mint_bolt12_quote(request).await?;
-                (response.quote, response.request, response.expiry)
+                (
+                    response.quote,
+                    response.request,
+                    response.expiry,
+                    Some(response.pubkey),
+                )
             }
             PaymentMethod::Custom(_) => {
                 let amount = amount.ok_or(Error::AmountUndefined)?;
@@ -92,7 +105,12 @@ impl Wallet {
                 };
 
                 let response = self.client.post_mint_custom_quote(&method, request).await?;
-                (response.quote, response.request, response.expiry)
+                (
+                    response.quote,
+                    response.request,
+                    response.expiry,
+                    response.pubkey,
+                )
             }
         };
 
@@ -109,7 +127,29 @@ impl Wallet {
 
         self.localstore.add_mint_quote(quote.clone()).await?;
 
-        Ok(quote)
+        let tx = Transaction {
+            mint_url: quote.mint_url.clone(),
+            direction: TransactionDirection::Incoming,
+            kind: TransactionKind::LN,
+            amount: amount.unwrap_or_default(),
+            fee: Amount::ZERO,
+            unit: quote.unit.clone(),
+            ys: resp_pubkey.into_iter().collect(),
+            token: quote.request.clone(),
+            status: TransactionStatus::Pending,
+            timestamp: unix_time(),
+            memo: None,
+            metadata: HashMap::new(),
+            quote_id: Some(quote.id.clone()),
+            payment_request: Some(quote.request.clone()),
+            payment_proof: None,
+            payment_method: Some(method),
+            saga_id: None,
+        };
+        // Add transaction to store
+        self.localstore.add_transaction(tx.clone()).await?;
+
+        Ok((quote, tx))
     }
 
     /// Checks the state of a mint quote with the mint

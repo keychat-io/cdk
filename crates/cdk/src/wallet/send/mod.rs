@@ -5,6 +5,8 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 
+use cdk_common::util::unix_time;
+use cdk_common::wallet::{Transaction, TransactionDirection, TransactionKind, TransactionStatus};
 use cdk_common::Id;
 use tracing::instrument;
 use uuid::Uuid;
@@ -13,7 +15,7 @@ use super::SendKind;
 use crate::amount::SplitTarget;
 use crate::fees::calculate_fee;
 use crate::nuts::nut00::ProofsMethods;
-use crate::nuts::{Proofs, SpendingConditions, Token};
+use crate::nuts::{Proofs, SpendingConditions, State, Token};
 use crate::{Amount, Error, Wallet};
 
 pub(crate) mod saga;
@@ -86,7 +88,7 @@ impl PreparedSend<'_> {
     }
 
     /// Confirm the prepared send and create a token
-    pub async fn confirm(self, memo: Option<SendMemo>) -> Result<Token, Error> {
+    pub async fn confirm(self, memo: Option<SendMemo>) -> Result<Transaction, Error> {
         self.wallet
             .confirm_send(
                 self.operation_id,
@@ -197,7 +199,7 @@ impl Wallet {
         swap_fee: Amount,
         send_fee: Amount,
         memo: Option<SendMemo>,
-    ) -> Result<Token, Error> {
+    ) -> Result<Transaction, Error> {
         let db_saga = self
             .localstore
             .get_saga(&operation_id)
@@ -215,8 +217,8 @@ impl Wallet {
             send_fee,
             db_saga,
         );
-        let (token, _saga) = saga.confirm(memo).await?;
-        Ok(token)
+        let (_token, tx, _saga) = saga.confirm(memo).await?;
+        Ok(tx)
     }
 
     /// Internal method called by `PreparedSend::cancel` with cached data.
@@ -353,6 +355,111 @@ impl Wallet {
         }
 
         Err(Error::Custom("Operation is not a pending send".to_string()))
+    }
+
+    /// Prepare a send transaction for one stamp with enough funds
+    ///
+    /// Finds a single proof matching the exact amount and returns it as a PreparedSend.
+    #[instrument(skip(self), err)]
+    pub async fn prepare_send_one_with_enough(
+        &self,
+        amount: Amount,
+        opts: SendOptions,
+    ) -> Result<PreparedSend<'_>, Error> {
+        tracing::info!("Preparing send one with enough");
+
+        let available_proofs = self
+            .get_proofs_with(
+                Some(vec![State::Unspent]),
+                opts.conditions.clone().map(|c| vec![c]),
+            )
+            .await?;
+
+        if let Some(proof) = available_proofs.into_iter().find(|p| p.amount == amount) {
+            let mut proofs_to_send = Proofs::new();
+            proofs_to_send.push(proof);
+
+            self.localstore
+                .update_proofs_state(proofs_to_send.ys()?, State::Reserved)
+                .await?;
+
+            return Ok(PreparedSend {
+                wallet: self,
+                operation_id: Uuid::new_v4(),
+                amount,
+                options: opts,
+                proofs_to_swap: Proofs::new(),
+                swap_fee: Amount::ZERO,
+                proofs_to_send,
+                send_fee: Amount::ZERO,
+            });
+        }
+
+        Err(Error::InsufficientFunds)
+    }
+
+    /// Finalize a send one stamp transaction
+    ///
+    /// Creates a token from a single proof without saga management.
+    #[instrument(skip(self), err)]
+    pub async fn send_one(
+        &self,
+        send: PreparedSend<'_>,
+        memo: Option<SendMemo>,
+    ) -> Result<Transaction, Error> {
+        let proofs_to_send = send.proofs_to_send;
+        let sendable_proof_ys = self
+            .get_proofs_with(
+                Some(vec![State::Reserved, State::Unspent]),
+                send.options.conditions.clone().map(|c| vec![c]),
+            )
+            .await?
+            .ys()?;
+        if proofs_to_send
+            .ys()?
+            .iter()
+            .any(|y| !sendable_proof_ys.contains(y))
+        {
+            tracing::warn!("Proofs to send are not reserved or unspent");
+            return Err(Error::UnexpectedProofState);
+        }
+
+        self.localstore
+            .update_proofs_state(proofs_to_send.ys()?, State::PendingSpent)
+            .await?;
+
+        let send_memo = send.options.memo.or(memo);
+        let memo = send_memo.and_then(|m| if m.include_memo { Some(m.memo) } else { None });
+
+        let token = Token::new(
+            self.mint_url.clone(),
+            proofs_to_send.clone(),
+            memo.clone(),
+            self.unit.clone(),
+        );
+
+        let tx = Transaction {
+            mint_url: self.mint_url.clone(),
+            direction: TransactionDirection::Outgoing,
+            kind: TransactionKind::Cashu,
+            amount: send.amount,
+            fee: Amount::ZERO,
+            unit: self.unit.clone(),
+            ys: proofs_to_send.ys()?,
+            token: token.to_string(),
+            status: TransactionStatus::Pending,
+            timestamp: unix_time(),
+            memo: memo.clone(),
+            metadata: send.options.metadata,
+            quote_id: None,
+            payment_request: None,
+            payment_proof: None,
+            payment_method: None,
+            saga_id: None,
+        };
+        self.localstore.add_transaction(tx.clone()).await?;
+
+        Ok(tx)
     }
 }
 

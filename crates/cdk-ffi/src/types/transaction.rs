@@ -22,6 +22,8 @@ pub struct Transaction {
     pub mint_url: MintUrl,
     /// Transaction direction
     pub direction: TransactionDirection,
+    /// Transaction kind
+    pub kind: TransactionKind,
     /// Amount
     pub amount: Amount,
     /// Fee
@@ -30,6 +32,10 @@ pub struct Transaction {
     pub unit: CurrencyUnit,
     /// Proof Ys (Y values from proofs)
     pub ys: Vec<PublicKey>,
+    /// Cashu token or LN invoice
+    pub token: String,
+    /// Transaction status
+    pub status: TransactionStatus,
     /// Unix timestamp
     pub timestamp: u64,
     /// Memo
@@ -54,10 +60,13 @@ impl From<cdk::wallet::types::Transaction> for Transaction {
             id: tx.id().into(),
             mint_url: tx.mint_url.into(),
             direction: tx.direction.into(),
+            kind: tx.kind.into(),
             amount: tx.amount.into(),
             fee: tx.fee.into(),
             unit: tx.unit.into(),
             ys: tx.ys.into_iter().map(Into::into).collect(),
+            token: tx.token,
+            status: tx.status.into(),
             timestamp: tx.timestamp,
             memo: tx.memo,
             metadata: tx.metadata,
@@ -82,10 +91,13 @@ impl TryFrom<Transaction> for cdk::wallet::types::Transaction {
         Ok(Self {
             mint_url: tx.mint_url.try_into()?,
             direction: tx.direction.into(),
+            kind: tx.kind.into(),
             amount: tx.amount.into(),
             fee: tx.fee.into(),
             unit: tx.unit.into(),
             ys: cdk_ys,
+            token: tx.token,
+            status: tx.status.into(),
             timestamp: tx.timestamp,
             memo: tx.memo,
             metadata: tx.metadata,
@@ -139,6 +151,8 @@ pub enum TransactionDirection {
     Incoming,
     /// Outgoing transaction (i.e., send or melt)
     Outgoing,
+    /// Split unit 1
+    Split,
 }
 
 impl From<cdk::wallet::types::TransactionDirection> for TransactionDirection {
@@ -146,6 +160,7 @@ impl From<cdk::wallet::types::TransactionDirection> for TransactionDirection {
         match direction {
             cdk::wallet::types::TransactionDirection::Incoming => TransactionDirection::Incoming,
             cdk::wallet::types::TransactionDirection::Outgoing => TransactionDirection::Outgoing,
+            cdk::wallet::types::TransactionDirection::Split => TransactionDirection::Split,
         }
     }
 }
@@ -155,6 +170,69 @@ impl From<TransactionDirection> for cdk::wallet::types::TransactionDirection {
         match direction {
             TransactionDirection::Incoming => cdk::wallet::types::TransactionDirection::Incoming,
             TransactionDirection::Outgoing => cdk::wallet::types::TransactionDirection::Outgoing,
+            TransactionDirection::Split => cdk::wallet::types::TransactionDirection::Split,
+        }
+    }
+}
+
+/// FFI-compatible TransactionKind
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Enum)]
+pub enum TransactionKind {
+    /// Cashu
+    Cashu,
+    /// Lightning Network
+    LN,
+}
+
+impl From<cdk::wallet::types::TransactionKind> for TransactionKind {
+    fn from(kind: cdk::wallet::types::TransactionKind) -> Self {
+        match kind {
+            cdk::wallet::types::TransactionKind::Cashu => TransactionKind::Cashu,
+            cdk::wallet::types::TransactionKind::LN => TransactionKind::LN,
+        }
+    }
+}
+
+impl From<TransactionKind> for cdk::wallet::types::TransactionKind {
+    fn from(kind: TransactionKind) -> Self {
+        match kind {
+            TransactionKind::Cashu => cdk::wallet::types::TransactionKind::Cashu,
+            TransactionKind::LN => cdk::wallet::types::TransactionKind::LN,
+        }
+    }
+}
+
+/// FFI-compatible TransactionStatus
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Enum)]
+pub enum TransactionStatus {
+    /// Pending
+    Pending,
+    /// Success
+    Success,
+    /// Failed
+    Failed,
+    /// Expired
+    Expired,
+}
+
+impl From<cdk::wallet::types::TransactionStatus> for TransactionStatus {
+    fn from(status: cdk::wallet::types::TransactionStatus) -> Self {
+        match status {
+            cdk::wallet::types::TransactionStatus::Pending => TransactionStatus::Pending,
+            cdk::wallet::types::TransactionStatus::Success => TransactionStatus::Success,
+            cdk::wallet::types::TransactionStatus::Failed => TransactionStatus::Failed,
+            cdk::wallet::types::TransactionStatus::Expired => TransactionStatus::Expired,
+        }
+    }
+}
+
+impl From<TransactionStatus> for cdk::wallet::types::TransactionStatus {
+    fn from(status: TransactionStatus) -> Self {
+        match status {
+            TransactionStatus::Pending => cdk::wallet::types::TransactionStatus::Pending,
+            TransactionStatus::Success => cdk::wallet::types::TransactionStatus::Success,
+            TransactionStatus::Failed => cdk::wallet::types::TransactionStatus::Failed,
+            TransactionStatus::Expired => cdk::wallet::types::TransactionStatus::Expired,
         }
     }
 }

@@ -21,7 +21,7 @@ use crate::error::Error;
 use crate::mint_url::MintUrl;
 use crate::nuts::nut11::{Conditions, SigFlag, SpendingConditions};
 use crate::nuts::nut18::Nut10SecretRequest;
-use crate::nuts::{CurrencyUnit, Nut10Secret, Transport};
+use crate::nuts::{CurrencyUnit, Nut10Secret, Token, Transport};
 #[cfg(feature = "nostr")]
 use crate::wallet::ReceiveOptions;
 use crate::wallet::{SendOptions, WalletRepository};
@@ -83,7 +83,8 @@ impl Wallet {
             )
             .await?;
 
-        let token = prepared_send.confirm(None).await?;
+        let tx = prepared_send.confirm(None).await?;
+        let token = Token::from_str(&tx.token)?;
 
         // We need the keysets information to properly convert from token proof to proof
         let keysets_info = match self.localstore.get_mint_keysets(token.mint_url()?).await? {
@@ -660,13 +661,13 @@ impl WalletRepository {
 
                     // Receive using the individual wallet
                     let token_str = token.to_string();
-                    let received = wallet
+                    let received_tx = wallet
                         .receive(&token_str, ReceiveOptions::default())
                         .await?;
 
                     // Stop after first successful receipt
                     cancel.cancel();
-                    return Ok(received);
+                    return Ok(received_tx.amount);
                 }
                 Err(_) => {
                     // Keep listening on parse errors; if you prefer fail-fast, return the error
@@ -737,11 +738,11 @@ impl WalletRepository {
 
                                 // Receive using the individual wallet
                                 let token_str = token.to_string();
-                                let received = wallet
+                                let received_tx = wallet
                                     .receive(&token_str, ReceiveOptions::default())
                                     .await?;
 
-                                return Ok(received);
+                                return Ok(received_tx.amount);
                             }
                             Err(_) => {
                                 // Ignore malformed payloads and continue listening

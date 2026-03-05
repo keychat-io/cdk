@@ -490,7 +490,7 @@ pub async fn fund_wallet(
     split_target: Option<SplitTarget>,
 ) -> Result<Amount> {
     let desired_amount = Amount::from(amount);
-    let quote = wallet
+    let (quote, _tx) = wallet
         .mint_quote(PaymentMethod::BOLT11, Some(desired_amount), None, None)
         .await?;
 

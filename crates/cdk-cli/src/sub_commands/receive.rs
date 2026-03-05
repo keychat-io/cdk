@@ -170,7 +170,7 @@ async fn receive_token(
     };
 
     let received = wallet.receive(token_str, receive_options).await?;
-    Ok(received)
+    Ok(received.amount)
 }
 
 /// Receive tokens sent to nostr pubkey via dm

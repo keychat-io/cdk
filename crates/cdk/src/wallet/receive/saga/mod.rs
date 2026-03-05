@@ -374,25 +374,26 @@ impl<'a> ReceiveSaga<'a, Prepared> {
             )
             .await?;
 
-        self.wallet
-            .localstore
-            .add_transaction(Transaction {
-                mint_url: self.wallet.mint_url.clone(),
-                direction: TransactionDirection::Incoming,
-                amount: total_amount,
-                fee,
-                unit: self.wallet.unit.clone(),
-                ys: proofs_ys,
-                timestamp: unix_time(),
-                memo: self.state_data.memo.clone(),
-                metadata: self.state_data.options.metadata.clone(),
-                quote_id: None,
-                payment_request: None,
-                payment_proof: None,
-                payment_method: None,
-                saga_id: Some(operation_id),
-            })
-            .await?;
+        let tx = Transaction {
+            mint_url: self.wallet.mint_url.clone(),
+            direction: TransactionDirection::Incoming,
+            kind: cdk_common::wallet::TransactionKind::Cashu,
+            amount: total_amount,
+            fee,
+            unit: self.wallet.unit.clone(),
+            ys: proofs_ys,
+            token: self.state_data.token.clone().unwrap_or_default(),
+            status: cdk_common::wallet::TransactionStatus::Success,
+            timestamp: unix_time(),
+            memo: self.state_data.memo.clone(),
+            metadata: self.state_data.options.metadata.clone(),
+            quote_id: None,
+            payment_request: None,
+            payment_proof: None,
+            payment_method: None,
+            saga_id: Some(operation_id),
+        };
+        self.wallet.localstore.add_transaction(tx.clone()).await?;
 
         clear_compensations(&mut self.compensations).await;
 
@@ -410,6 +411,7 @@ impl<'a> ReceiveSaga<'a, Prepared> {
             compensations: self.compensations,
             state_data: Finalized {
                 amount: total_amount,
+                transaction: tx,
             },
         })
     }
@@ -443,6 +445,11 @@ impl<'a> ReceiveSaga<'a, Finalized> {
     /// Consume the saga and return the received amount
     pub fn into_amount(self) -> Amount {
         self.state_data.amount
+    }
+
+    /// Consume the saga and return the transaction record
+    pub fn into_transaction(self) -> Transaction {
+        self.state_data.transaction
     }
 }
 

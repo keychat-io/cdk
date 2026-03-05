@@ -5,13 +5,14 @@ use serde::{Deserialize, Serialize};
 use crate::error::Error;
 use crate::nuts::nut00::ProofsMethods;
 use crate::nuts::{CurrencyUnit, MeltQuoteState, PaymentMethod, Proofs};
-// Re-export ProofInfo from wallet module for backwards compatibility
 #[cfg(feature = "wallet")]
 pub use crate::wallet::ProofInfo;
+#[cfg(feature = "wallet")]
+use crate::wallet::Transaction;
 use crate::Amount;
 
 /// Result of a finalized melt operation
-#[derive(Clone, Hash, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct FinalizedMelt {
     /// Quote ID
     quote_id: String,
@@ -25,6 +26,9 @@ pub struct FinalizedMelt {
     amount: Amount,
     /// Fee paid
     fee_paid: Amount,
+    /// The transaction record
+    #[cfg(feature = "wallet")]
+    transaction: Option<Transaction>,
 }
 
 impl FinalizedMelt {
@@ -44,6 +48,8 @@ impl FinalizedMelt {
             change,
             amount,
             fee_paid,
+            #[cfg(feature = "wallet")]
+            transaction: None,
         }
     }
 
@@ -84,6 +90,8 @@ impl FinalizedMelt {
             change: change_proofs,
             amount: quote_amount,
             fee_paid,
+            #[cfg(feature = "wallet")]
+            transaction: None,
         })
     }
 
@@ -140,6 +148,24 @@ impl FinalizedMelt {
         self.amount
             .checked_add(self.fee_paid)
             .expect("We check when calc fee paid")
+    }
+
+    /// Set the transaction record
+    #[cfg(feature = "wallet")]
+    pub fn set_transaction(&mut self, transaction: Transaction) {
+        self.transaction = Some(transaction);
+    }
+
+    /// Get the transaction record
+    #[cfg(feature = "wallet")]
+    pub fn transaction(&self) -> Option<&Transaction> {
+        self.transaction.as_ref()
+    }
+
+    /// Consume self and return the transaction record
+    #[cfg(feature = "wallet")]
+    pub fn into_transaction(self) -> Option<Transaction> {
+        self.transaction
     }
 }
 

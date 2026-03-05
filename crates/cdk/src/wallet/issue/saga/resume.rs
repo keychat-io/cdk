@@ -199,10 +199,13 @@ impl Wallet {
             .add_transaction(Transaction {
                 mint_url: self.mint_url.clone(),
                 direction: TransactionDirection::Incoming,
+                kind: cdk_common::wallet::TransactionKind::LN,
                 amount: minted_amount,
                 fee: Amount::ZERO,
                 unit: self.unit.clone(),
                 ys,
+                token: quote.request.clone(),
+                status: cdk_common::wallet::TransactionStatus::Success,
                 timestamp: unix_time(),
                 memo: None,
                 metadata: HashMap::new(),

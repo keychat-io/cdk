@@ -155,6 +155,42 @@ impl PreMintSecrets {
         Ok(pre_mint_secrets)
     }
 
+    /// Generate blinded messages from predetermined secrets and blindings in denomination amount
+    /// factor
+    #[instrument(skip(seed))]
+    pub fn from_seed_denomination(
+        keyset_id: Id,
+        counter: u32,
+        seed: &[u8; 64],
+        amount: Amount,
+        denomination: Amount,
+    ) -> Result<Self, Error> {
+        let mut pre_mint_secrets = PreMintSecrets::new(keyset_id);
+
+        let mut counter = counter;
+
+        for _a in 0..*amount.as_ref() {
+            let secret = Secret::from_seed(seed, keyset_id, counter)?;
+            let blinding_factor = SecretKey::from_seed(seed, keyset_id, counter)?;
+
+            let (blinded, r) = blind_message(&secret.to_bytes(), Some(blinding_factor))?;
+
+            let blinded_message = BlindedMessage::new(denomination, keyset_id, blinded);
+
+            let pre_mint = PreMint {
+                blinded_message,
+                secret: secret.clone(),
+                r,
+                amount: denomination,
+            };
+
+            pre_mint_secrets.secrets.push(pre_mint);
+            counter += 1;
+        }
+
+        Ok(pre_mint_secrets)
+    }
+
     /// New [`PreMintSecrets`] from seed with a zero amount used for change
     pub fn from_seed_blank(
         keyset_id: Id,
