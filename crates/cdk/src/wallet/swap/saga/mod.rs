@@ -31,8 +31,12 @@
 //! | `[compensated]` | Swap rolled back, input proofs released back to wallet |
 //! | `[skipped]` | Recovery deferred (mint unreachable), will retry on next recovery |
 
+use std::collections::HashMap;
+
+use cdk_common::util::unix_time;
 use cdk_common::wallet::{
-    OperationData, ProofInfo, SwapOperationData, SwapSagaState, WalletSaga, WalletSagaState,
+    OperationData, ProofInfo, SwapOperationData, SwapSagaState, Transaction, TransactionDirection,
+    TransactionKind, TransactionStatus, WalletSaga, WalletSagaState,
 };
 use tracing::instrument;
 
@@ -40,7 +44,7 @@ use self::state::{Finalized, Initial, Prepared};
 use crate::amount::SplitTarget;
 use crate::dhke::construct_proofs;
 use crate::nuts::nut00::ProofsMethods;
-use crate::nuts::{nut10, Proofs, SpendingConditions, State};
+use crate::nuts::{nut10, Proofs, SpendingConditions, State, Token};
 use crate::wallet::saga::{
     add_compensation, clear_compensations, execute_compensations, new_compensations, Compensations,
     RevertProofReservation as RevertSwapProofReservation,
@@ -170,6 +174,87 @@ impl<'a> SwapSaga<'a, Initial> {
                 spending_conditions,
                 pre_swap,
                 saga,
+                denomination: None,
+            },
+        })
+    }
+
+    /// Prepare a denomination-based swap operation.
+    ///
+    /// Similar to `prepare()` but uses `create_swap_denomination()` to create
+    /// proofs of a specific denomination (e.g., 32x1-sat proofs).
+    #[instrument(skip_all)]
+    pub async fn prepare_denomination(
+        mut self,
+        denomination: Amount,
+        amount: Option<Amount>,
+        input_proofs: Proofs,
+        include_fees: bool,
+    ) -> Result<SwapSaga<'a, Prepared>, Error> {
+        tracing::info!(
+            "Preparing denomination swap with operation {}",
+            self.state_data.operation_id
+        );
+
+        let input_ys = input_proofs.ys()?;
+
+        let pre_swap = self
+            .wallet
+            .create_swap_denomination(denomination, amount, input_proofs.clone(), include_fees)
+            .await?;
+
+        let fee = pre_swap.fee;
+        let input_amount = input_proofs.total_amount()?;
+
+        let counter_end = self
+            .wallet
+            .localstore
+            .increment_keyset_counter(&pre_swap.pre_mint_secrets.keyset_id, 0)
+            .await?;
+        let counter_start = counter_end.saturating_sub(pre_swap.derived_secret_count);
+        let output_amount = input_amount
+            .checked_sub(fee)
+            .ok_or(Error::InsufficientFunds)?;
+
+        let saga = WalletSaga::new(
+            self.state_data.operation_id,
+            WalletSagaState::Swap(SwapSagaState::ProofsReserved),
+            input_amount,
+            self.wallet.mint_url.clone(),
+            self.wallet.unit.clone(),
+            OperationData::Swap(SwapOperationData {
+                input_amount,
+                output_amount,
+                counter_start: Some(counter_start),
+                counter_end: Some(counter_end),
+                blinded_messages: None,
+            }),
+        );
+
+        self.wallet.localstore.add_saga(saga.clone()).await?;
+
+        add_compensation(
+            &mut self.compensations,
+            Box::new(RevertSwapProofReservation {
+                localstore: self.wallet.localstore.clone(),
+                proof_ys: input_ys.clone(),
+                saga_id: self.state_data.operation_id,
+            }),
+        )
+        .await;
+
+        Ok(SwapSaga {
+            wallet: self.wallet,
+            compensations: self.compensations,
+            state_data: Prepared {
+                operation_id: self.state_data.operation_id,
+                amount,
+                amount_split_target: SplitTarget::default(),
+                input_ys,
+                spending_conditions: None,
+                pre_swap,
+                saga,
+                denomination: Some(denomination),
             },
         })
     }
@@ -238,25 +323,28 @@ impl<'a> SwapSaga<'a, Prepared> {
             .get_keyset_fees_and_amounts_by_id(active_keyset_id)
             .await?;
 
-        match self.state_data.amount {
-            Some(amount) => {
-                let (proofs_with_condition, proofs_without_condition): (Proofs, Proofs) =
-                    post_swap_proofs.into_iter().partition(|p| {
-                        let nut10_secret: Result<nut10::Secret, _> = p.secret.clone().try_into();
-                        nut10_secret.is_ok()
-                    });
+        if let Some(denomination) = self.state_data.denomination {
+            // Denomination-based proof splitting (for split/prepare_one_proofs)
+            match self.state_data.amount {
+                Some(amount) => {
+                    let (_proofs_with_condition, proofs_without_condition): (Proofs, Proofs) =
+                        post_swap_proofs.into_iter().partition(|p| {
+                            let nut10_secret: Result<nut10::Secret, _> =
+                                p.secret.clone().try_into();
+                            nut10_secret.is_ok()
+                        });
 
-                let (proofs_to_send, proofs_to_keep) = match &self.state_data.spending_conditions {
-                    Some(_) => (proofs_with_condition, proofs_without_condition),
-                    None => {
+                    let (proofs_to_send, proofs_to_keep) = {
                         let mut all_proofs = proofs_without_condition;
                         all_proofs.reverse();
 
                         let mut proofs_to_send = Proofs::new();
                         let mut proofs_to_keep = Proofs::new();
+                        let target = vec![denomination; *amount.as_ref() as usize];
+                        let split_target = SplitTarget::Values(target);
                         let mut amount_split = amount.split_targeted(
-                            &self.state_data.amount_split_target,
-                            &fee_and_amounts,
+                            &split_target,
+                            &(0, (0..32).map(|x| 2u64.pow(x)).collect::<Vec<_>>()).into(),
                         )?;
 
                         for proof in all_proofs {
@@ -270,24 +358,81 @@ impl<'a> SwapSaga<'a, Prepared> {
                         }
 
                         (proofs_to_send, proofs_to_keep)
-                    }
-                };
+                    };
 
-                let send_proofs_info = proofs_to_send
-                    .clone()
-                    .into_iter()
-                    .map(|proof| {
-                        ProofInfo::new(proof, mint_url.clone(), State::Reserved, unit.clone())
-                    })
-                    .collect::<Result<Vec<ProofInfo>, _>>()?;
-                added_proofs = send_proofs_info;
+                    let send_proofs_info = proofs_to_send
+                        .clone()
+                        .into_iter()
+                        .map(|proof| {
+                            ProofInfo::new(proof, mint_url.clone(), State::Unspent, unit.clone())
+                        })
+                        .collect::<Result<Vec<ProofInfo>, _>>()?;
+                    added_proofs = send_proofs_info;
 
-                change_proofs = proofs_to_keep;
-                send_proofs = Some(proofs_to_send);
+                    change_proofs = proofs_to_keep;
+                    send_proofs = Some(proofs_to_send);
+                }
+                None => {
+                    change_proofs = post_swap_proofs;
+                    send_proofs = None;
+                }
             }
-            None => {
-                change_proofs = post_swap_proofs;
-                send_proofs = None;
+        } else {
+            // Regular swap proof splitting
+            match self.state_data.amount {
+                Some(amount) => {
+                    let (proofs_with_condition, proofs_without_condition): (Proofs, Proofs) =
+                        post_swap_proofs.into_iter().partition(|p| {
+                            let nut10_secret: Result<nut10::Secret, _> =
+                                p.secret.clone().try_into();
+                            nut10_secret.is_ok()
+                        });
+
+                    let (proofs_to_send, proofs_to_keep) =
+                        match &self.state_data.spending_conditions {
+                            Some(_) => (proofs_with_condition, proofs_without_condition),
+                            None => {
+                                let mut all_proofs = proofs_without_condition;
+                                all_proofs.reverse();
+
+                                let mut proofs_to_send = Proofs::new();
+                                let mut proofs_to_keep = Proofs::new();
+                                let mut amount_split = amount.split_targeted(
+                                    &self.state_data.amount_split_target,
+                                    &fee_and_amounts,
+                                )?;
+
+                                for proof in all_proofs {
+                                    if let Some(idx) =
+                                        amount_split.iter().position(|&a| a == proof.amount)
+                                    {
+                                        proofs_to_send.push(proof);
+                                        amount_split.remove(idx);
+                                    } else {
+                                        proofs_to_keep.push(proof);
+                                    }
+                                }
+
+                                (proofs_to_send, proofs_to_keep)
+                            }
+                        };
+
+                    let send_proofs_info = proofs_to_send
+                        .clone()
+                        .into_iter()
+                        .map(|proof| {
+                            ProofInfo::new(proof, mint_url.clone(), State::Reserved, unit.clone())
+                        })
+                        .collect::<Result<Vec<ProofInfo>, _>>()?;
+                    added_proofs = send_proofs_info;
+
+                    change_proofs = proofs_to_keep;
+                    send_proofs = Some(proofs_to_send);
+                }
+                None => {
+                    change_proofs = post_swap_proofs;
+                    send_proofs = None;
+                }
             }
         }
 
@@ -306,6 +451,33 @@ impl<'a> SwapSaga<'a, Prepared> {
             .localstore
             .update_proofs_state(self.state_data.input_ys.clone(), State::Spent)
             .await?;
+
+        // Record transaction for denomination swaps
+        if self.state_data.denomination.is_some() {
+            let fee = self.state_data.pre_swap.fee;
+            let input_amount = self.state_data.saga.amount;
+            let token = Token::new(mint_url.clone(), Proofs::new(), None, unit.clone());
+            let tx = Transaction {
+                mint_url: mint_url.clone(),
+                direction: TransactionDirection::Split,
+                kind: TransactionKind::Cashu,
+                amount: input_amount,
+                fee,
+                unit: unit.clone(),
+                ys: self.state_data.input_ys.clone(),
+                token: token.to_string(),
+                status: TransactionStatus::Success,
+                timestamp: unix_time(),
+                memo: None,
+                metadata: HashMap::new(),
+                quote_id: None,
+                payment_request: None,
+                payment_proof: None,
+                payment_method: None,
+                saga_id: Some(operation_id),
+            };
+            self.wallet.localstore.add_transaction(tx).await?;
+        }
 
         clear_compensations(&mut self.compensations).await;
 

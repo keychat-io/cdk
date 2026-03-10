@@ -455,6 +455,28 @@ impl<'a> MintSaga<'a, Prepared> {
 
             wallet.localstore.update_proofs(proof_infos, vec![]).await?;
 
+            // Delete the pending transaction created by mint_quote() before inserting the success one
+            if let Ok(pending_txs) = wallet
+                .localstore
+                .list_transactions_with_status(
+                    Some(wallet.mint_url.clone()),
+                    Some(TransactionDirection::Incoming),
+                    Some(wallet.unit.clone()),
+                    cdk_common::wallet::TransactionStatus::Pending,
+                )
+                .await
+            {
+                if let Some(pending_tx) = pending_txs
+                    .iter()
+                    .find(|t| t.quote_id.as_deref() == Some(&quote_id))
+                {
+                    let _ = wallet
+                        .localstore
+                        .remove_transaction(pending_tx.id())
+                        .await;
+                }
+            }
+
             wallet
                 .localstore
                 .add_transaction(Transaction {

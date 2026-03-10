@@ -238,55 +238,36 @@ impl Wallet {
                 let re = self.receive(&tx.token, ReceiveOptions::default()).await;
                 match re {
                     Ok(_) => {
-                        self.localstore.remove_transaction(tx_id.clone()).await?;
+                        // Same token -> same ys -> same tx_id, upsert overwrites the failed tx
+                        tx = re?;
                     }
                     Err(e) => {
                         tracing::error!("Failed to receive tokens again: {:?}", e);
                         if e.to_string().contains("Token Already Spent") {
-                            tx.status = TransactionStatus::Success;
-                            self.localstore.add_transaction(tx.clone()).await?;
-                            return Err(Error::Custom(
-                                "Check transaction of receive error Token Already Spent"
-                                    .to_string(),
-                            ));
+                            // Token already spent: either we received it before (success tx already exists)
+                            // or someone else claimed it. Either way, delete this failed tx.
+                            tracing::warn!("Token already spent, deleting failed transaction");
+                            let _ = self.localstore.remove_transaction(tx_id.clone()).await;
                         }
-                        self.check_proofs_from_mint().await?;
-                        self.restore().await?;
                     }
                 }
-            } else if tx.direction == TransactionDirection::Outgoing {
-                let re = self.restore().await;
+            } else if tx.direction == TransactionDirection::Outgoing
+                || tx.direction == TransactionDirection::Split
+            {
+                let re = self.revert_transaction(tx_id.clone()).await;
                 match re {
                     Ok(_) => {
-                        tracing::info!("Proofs restored successfully");
-                        tx.status = TransactionStatus::Success;
-                        self.localstore.add_transaction(tx.clone()).await?;
+                        tracing::info!("Proofs revert_transaction successfully");
+                        self.localstore.remove_transaction(tx_id.clone()).await?;
                     }
                     Err(e) => {
-                        tracing::error!("Failed to restore proofs: {:?}", e);
-                        return Err(Error::Custom(
-                            "Check transaction of restore proofs failed for [Outgoing]".to_string(),
-                        ));
-                    }
-                }
-            } else if tx.direction == TransactionDirection::Split {
-                let re = self.restore().await;
-                match re {
-                    Ok(_) => {
-                        tracing::info!("Proofs restored successfully, and delete the tx");
-                        self.localstore.remove_transaction(tx.clone().id()).await?;
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to restore proofs: {:?}", e);
-                        return Err(Error::Custom(
-                            "Check transaction of restore proofs failed for [Split]".to_string(),
-                        ));
+                        tracing::error!("Failed to revert_transaction: {:?}", e);
                     }
                 }
             }
         } else if tx.kind == TransactionKind::LN {
             if tx.direction == TransactionDirection::Incoming {
-                if let Some(quote_id) = tx.metadata.get("quote_id") {
+                if let Some(quote_id) = tx.quote_id.as_deref() {
                     let mint_quote = self.localstore.get_mint_quote(quote_id).await?;
                     let mint_quote_response = self.check_mint_quote_status(quote_id).await?;
 
@@ -294,27 +275,28 @@ impl Wallet {
                         MintQuoteState::Paid | MintQuoteState::Issued => {
                             let res = self.mint(quote_id, SplitTarget::default(), None).await;
                             match res {
-                                Ok(_proofs) => {
-                                    tx.status = TransactionStatus::Success;
-                                    self.localstore.add_transaction(tx.clone()).await?;
+                                Ok(proofs) => {
+                                    tracing::info!(
+                                        "Mint tokens successfully for quote {}",
+                                        quote_id
+                                    );
+                                    // Delete the old failed tx
+                                    let _ = self.localstore.remove_transaction(tx_id.clone()).await;
+                                    // Return the new transaction created by mint saga
+                                    let ys: Vec<PublicKey> = proofs.ys()?;
+                                    let new_tx_id = TransactionId::new(ys);
+                                    if let Ok(Some(new_tx)) =
+                                        self.localstore.get_transaction(new_tx_id).await
+                                    {
+                                        return Ok(new_tx);
+                                    }
                                 }
                                 Err(e) => {
-                                    tracing::error!("Failed to mint tokens again: {:?}", e);
-                                    let re = self.restore().await;
-                                    match re {
-                                        Ok(_) => {
-                                            tracing::info!("Proofs restored successfully");
-                                            tx.status = TransactionStatus::Success;
-                                            self.localstore.add_transaction(tx.clone()).await?;
-                                        }
-                                        Err(e) => {
-                                            tracing::error!("Failed to restore proofs: {:?}", e);
-                                            return Err(Error::Custom(
-                                                "Check transaction of restore proofs failed"
-                                                    .to_string(),
-                                            ));
-                                        }
-                                    }
+                                    tracing::error!(
+                                        "Failed to mint tokens for quote {}: {:?}",
+                                        quote_id,
+                                        e
+                                    );
                                 }
                             }
                         }
@@ -329,14 +311,12 @@ impl Wallet {
                     }
                 }
             } else if tx.direction == TransactionDirection::Outgoing {
-                if let Some(quote_id) = tx.metadata.get("quote_id") {
+                if let Some(quote_id) = tx.quote_id.as_deref() {
                     let melt_quote = self.localstore.get_melt_quote(quote_id).await?;
                     let melt_quote_response = self.check_melt_quote_status(quote_id).await?;
                     match melt_quote_response.state {
                         MeltQuoteState::Paid => {
                             tx.status = TransactionStatus::Success;
-                            self.localstore.add_transaction(tx.clone()).await?;
-                            return Err(Error::Custom("The invoice has already paid".to_string()));
                         }
                         _ => {
                             if let Some(melt_quote) = melt_quote {
@@ -423,18 +403,34 @@ impl Wallet {
                 return Ok(tx);
             }
             if tx.direction == TransactionDirection::Incoming {
-                if let Some(quote_id) = tx.metadata.get("quote_id") {
+                if let Some(quote_id) = tx.quote_id.as_deref() {
                     let mint_quote = self.localstore.get_mint_quote(quote_id).await?;
                     let mint_quote_response = self.check_mint_quote_status(quote_id).await?;
                     match mint_quote_response.state {
                         MintQuoteState::Paid | MintQuoteState::Issued => {
                             let res = self.mint(quote_id, SplitTarget::default(), None).await;
                             match res {
-                                Ok(_proofs) => {
-                                    tx.status = TransactionStatus::Success;
-                                    self.localstore.add_transaction(tx.clone()).await?;
+                                Ok(proofs) => {
+                                    tracing::info!(
+                                        "Mint tokens successfully for quote {}",
+                                        quote_id
+                                    );
+                                    // Return the new transaction created by mint saga
+                                    let ys: Vec<PublicKey> = proofs.ys()?;
+                                    let new_tx_id = TransactionId::new(ys);
+                                    if let Ok(Some(new_tx)) =
+                                        self.localstore.get_transaction(new_tx_id).await
+                                    {
+                                        return Ok(new_tx);
+                                    }
                                 }
-                                Err(_e) => {}
+                                Err(e) => {
+                                    tracing::error!(
+                                        "Failed to mint tokens for quote {}: {:?}",
+                                        quote_id,
+                                        e
+                                    );
+                                }
                             }
                         }
                         _ => {
@@ -448,13 +444,13 @@ impl Wallet {
                     }
                 }
             } else if tx.direction == TransactionDirection::Outgoing {
-                if let Some(quote_id) = tx.metadata.get("quote_id") {
+                if let Some(quote_id) = tx.quote_id.as_deref() {
                     let melt_quote = self.localstore.get_melt_quote(quote_id).await?;
                     let melt_quote_response = self.check_melt_quote_status(quote_id).await?;
                     match melt_quote_response.state {
                         MeltQuoteState::Paid => {
                             tx.status = TransactionStatus::Success;
-                            self.localstore.add_transaction(tx.clone()).await?;
+                            tracing::info!("Melt tokens successfully for quote {}", quote_id);
                         }
                         _ => {
                             if let Some(melt_quote) = melt_quote {
@@ -496,7 +492,7 @@ impl Wallet {
                     self.localstore.add_transaction(tx.clone()).await?;
                     continue;
                 }
-                if let Some(quote_id) = tx.metadata.get("quote_id") {
+                if let Some(quote_id) = tx.quote_id.as_deref() {
                     let mint_quote = self.localstore.get_mint_quote(quote_id).await?;
                     let mint_quote_response = self.check_mint_quote_status(quote_id).await?;
 
@@ -505,8 +501,6 @@ impl Wallet {
                             if let Ok(_proofs) =
                                 self.mint(quote_id, SplitTarget::default(), None).await
                             {
-                                tx.status = TransactionStatus::Success;
-                                self.localstore.add_transaction(tx.clone()).await?;
                                 update_count += 1;
                             }
                         }

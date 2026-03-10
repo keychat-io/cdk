@@ -201,7 +201,7 @@ impl Wallet {
     ///
     /// Returns an error if:
     /// - The transaction is not found
-    /// - The transaction is not outgoing
+    /// - The transaction is not outgoing split
     /// - The saga is not in a revocable state (e.g., already completed)
     /// - The token has already been claimed by the recipient
     pub async fn revert_transaction(&self, id: TransactionId) -> Result<(), Error> {
@@ -211,7 +211,9 @@ impl Wallet {
             .await?
             .ok_or(Error::TransactionNotFound)?;
 
-        if tx.direction != TransactionDirection::Outgoing {
+        if tx.direction != TransactionDirection::Outgoing
+            && tx.direction != TransactionDirection::Split
+        {
             return Err(Error::InvalidTransactionDirection);
         }
 

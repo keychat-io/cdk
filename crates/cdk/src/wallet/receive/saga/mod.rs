@@ -39,7 +39,7 @@ use bitcoin::XOnlyPublicKey;
 use cdk_common::util::unix_time;
 use cdk_common::wallet::{
     OperationData, ProofInfo, ReceiveOperationData, ReceiveSagaState, Transaction,
-    TransactionDirection, WalletSaga, WalletSagaState,
+    TransactionDirection, TransactionId, WalletSaga, WalletSagaState,
 };
 use tracing::instrument;
 
@@ -223,6 +223,9 @@ impl<'a> ReceiveSaga<'a, Prepared> {
 
         let operation_id = self.state_data.operation_id;
 
+        // Compute tx_id from input proofs for self-send detection
+        let tx_id = TransactionId::new(proofs_ys.clone());
+
         let proofs_info = proofs
             .clone()
             .into_iter()
@@ -354,7 +357,28 @@ impl<'a> ReceiveSaga<'a, Prepared> {
         let total_amount = recv_proofs.total_amount()?;
         let fee = self.state_data.proofs_amount - total_amount;
 
+        // first check if this send and receive byself
+        let mut self_send = false;
+        let mut tx_db = self
+            .wallet
+            .localstore
+            .get_transaction(tx_id.clone())
+            .await?;
+        if let Some(tx_db) = &mut tx_db {
+            tracing::info!(
+                "Receive by self detected, updating existing transaction {:?}",
+                tx_db.id()
+            );
+            tx_db.status = cdk_common::wallet::TransactionStatus::Success;
+            self.wallet
+                .localstore
+                .add_transaction(tx_db.clone())
+                .await?;
+            self_send = true;
+        }
+
         let recv_proof_infos = recv_proofs
+            .clone()
             .into_iter()
             .map(|proof| {
                 ProofInfo::new(
@@ -374,14 +398,18 @@ impl<'a> ReceiveSaga<'a, Prepared> {
             )
             .await?;
 
-        let tx = Transaction {
+        let tx_new = Transaction {
             mint_url: self.wallet.mint_url.clone(),
             direction: TransactionDirection::Incoming,
             kind: cdk_common::wallet::TransactionKind::Cashu,
             amount: total_amount,
             fee,
             unit: self.wallet.unit.clone(),
-            ys: proofs_ys,
+            ys: if self_send {
+                recv_proofs.ys()?
+            } else {
+                proofs_ys
+            },
             token: self.state_data.token.clone().unwrap_or_default(),
             status: cdk_common::wallet::TransactionStatus::Success,
             timestamp: unix_time(),
@@ -393,7 +421,10 @@ impl<'a> ReceiveSaga<'a, Prepared> {
             payment_method: None,
             saga_id: Some(operation_id),
         };
-        self.wallet.localstore.add_transaction(tx.clone()).await?;
+        self.wallet
+            .localstore
+            .add_transaction(tx_new.clone())
+            .await?;
 
         clear_compensations(&mut self.compensations).await;
 
@@ -411,7 +442,7 @@ impl<'a> ReceiveSaga<'a, Prepared> {
             compensations: self.compensations,
             state_data: Finalized {
                 amount: total_amount,
-                transaction: tx,
+                transaction: tx_new,
             },
         })
     }

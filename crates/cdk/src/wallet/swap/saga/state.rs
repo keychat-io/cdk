@@ -40,6 +40,8 @@ pub struct Prepared {
     pub pre_swap: PreSwap,
     /// The persisted saga for optimistic locking (contains recovery data)
     pub saga: WalletSaga,
+    /// Denomination for denomination-based swaps (None for regular swaps)
+    pub denomination: Option<Amount>,
 }
 
 /// Finalized state - swap completed successfully.
