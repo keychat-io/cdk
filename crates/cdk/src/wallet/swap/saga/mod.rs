@@ -455,13 +455,13 @@ impl<'a> SwapSaga<'a, Prepared> {
         // Record transaction for denomination swaps
         if self.state_data.denomination.is_some() {
             let fee = self.state_data.pre_swap.fee;
-            let input_amount = self.state_data.saga.amount;
+            // let input_amount = self.state_data.saga.amount;
             let token = Token::new(mint_url.clone(), Proofs::new(), None, unit.clone());
             let tx = Transaction {
                 mint_url: mint_url.clone(),
                 direction: TransactionDirection::Split,
                 kind: TransactionKind::Cashu,
-                amount: input_amount,
+                amount: 32.into(),
                 fee,
                 unit: unit.clone(),
                 ys: self.state_data.input_ys.clone(),
