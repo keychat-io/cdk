@@ -275,7 +275,7 @@ impl<'a> SendSaga<'a, Initial> {
 
         self.wallet
             .localstore
-            .update_proofs_state(proof_ys.clone(), State::Reserved)
+            .reserve_proofs(proof_ys.clone(), &self.state_data.operation_id)
             .await?;
 
         let memo_text = opts.memo.as_ref().map(|m| m.memo.clone());

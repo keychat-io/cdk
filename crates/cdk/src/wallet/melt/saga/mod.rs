@@ -309,7 +309,7 @@ impl<'a> MeltSaga<'a, Initial> {
 
             self.wallet
                 .localstore
-                .update_proofs_state(proof_ys.clone(), State::Reserved)
+                .reserve_proofs(proof_ys.clone(), &operation_id)
                 .await?;
 
             let saga = WalletSaga::new(
@@ -393,7 +393,7 @@ impl<'a> MeltSaga<'a, Initial> {
         if !proof_ys.is_empty() {
             self.wallet
                 .localstore
-                .update_proofs_state(proof_ys.clone(), State::Reserved)
+                .reserve_proofs(proof_ys.clone(), &operation_id)
                 .await?;
         }
 
