@@ -71,6 +71,7 @@ impl Wallet {
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn create_swap(
         &self,
+        operation_id: &uuid::Uuid,
         active_keyset_id: Id,
         fee_and_amounts: &FeeAndAmounts,
         amount: Option<Amount>,
@@ -86,9 +87,7 @@ impl Wallet {
         let proofs_total = proofs.total_amount()?;
 
         let ys: Vec<PublicKey> = proofs.ys()?;
-        self.localstore
-            .update_proofs_state(ys, State::Reserved)
-            .await?;
+        self.localstore.reserve_proofs(ys, operation_id).await?;
 
         let total_to_subtract = amount
             .unwrap_or(Amount::ZERO)

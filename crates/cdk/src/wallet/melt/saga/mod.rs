@@ -478,16 +478,18 @@ impl<'a> MeltSaga<'a, Initial> {
         let proof_ys = proofs.ys()?;
 
         // Since proofs may be external (not in our database), add them first
-        // Set to Reserved state like the regular prepare() does
+        // while preserving the operation link needed for recovery.
         let proofs_info = proofs
             .clone()
             .into_iter()
             .map(|p| {
-                ProofInfo::new(
+                ProofInfo::new_with_operations(
                     p,
                     self.wallet.mint_url.clone(),
                     State::Reserved,
                     self.wallet.unit.clone(),
+                    Some(operation_id),
+                    None,
                 )
             })
             .collect::<Result<Vec<ProofInfo>, _>>()?;

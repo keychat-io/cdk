@@ -118,6 +118,7 @@ impl<'a> SwapSaga<'a, Initial> {
         let pre_swap = self
             .wallet
             .create_swap(
+                &self.state_data.operation_id,
                 active_keyset_id,
                 &fee_and_amounts,
                 amount,

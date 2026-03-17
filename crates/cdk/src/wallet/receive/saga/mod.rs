@@ -276,6 +276,7 @@ impl<'a> ReceiveSaga<'a, Prepared> {
         let mut pre_swap = self
             .wallet
             .create_swap(
+                &operation_id,
                 self.state_data.active_keyset_id,
                 &fee_and_amounts,
                 None,
