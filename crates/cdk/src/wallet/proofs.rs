@@ -235,11 +235,10 @@ impl Wallet {
         }
         if tx.kind == TransactionKind::Cashu {
             if tx.direction == TransactionDirection::Incoming {
-                let re = self.receive(&tx.token, ReceiveOptions::default()).await;
-                match re {
-                    Ok(_) => {
+                match self.receive(&tx.token, ReceiveOptions::default()).await {
+                    Ok(received_tx) => {
                         // Same token -> same ys -> same tx_id, upsert overwrites the failed tx
-                        tx = re?;
+                        tx = received_tx;
                     }
                     Err(e) => {
                         tracing::error!("Failed to receive tokens again: {:?}", e);

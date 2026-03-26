@@ -109,12 +109,6 @@ impl<'a> SwapSaga<'a, Initial> {
 
         let input_ys = input_proofs.ys()?;
 
-        // Reserve proofs with operation_id BEFORE create_swap so recovery can find them
-        self.wallet
-            .localstore
-            .reserve_proofs(input_ys.clone(), &self.state_data.operation_id)
-            .await?;
-
         let pre_swap = self
             .wallet
             .create_swap(
