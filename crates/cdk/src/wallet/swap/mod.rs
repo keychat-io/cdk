@@ -244,6 +244,7 @@ impl Wallet {
     #[instrument(skip(self, proofs))]
     pub async fn create_swap_denomination(
         &self,
+        operation_id: &uuid::Uuid,
         denomination: Amount,
         amount: Option<Amount>,
         proofs: Proofs,
@@ -258,13 +259,18 @@ impl Wallet {
         let proofs_total = proofs.total_amount()?;
 
         let ys: Vec<PublicKey> = proofs.ys()?;
-        self.localstore
-            .update_proofs_state(ys, State::Reserved)
-            .await?;
+        self.localstore.reserve_proofs(ys, operation_id).await?;
 
         let fee = self.get_proofs_fee(&proofs).await?;
 
-        let change_amount: Amount = proofs_total - amount.unwrap_or(Amount::ZERO) - fee.total;
+        let total_to_subtract = amount
+            .unwrap_or(Amount::ZERO)
+            .checked_add(fee.total)
+            .ok_or(Error::AmountOverflow)?;
+
+        let change_amount: Amount = proofs_total
+            .checked_sub(total_to_subtract)
+            .ok_or(Error::InsufficientFunds)?;
 
         let change_split_target = self
             .determine_split_target_values(change_amount, &fee_and_amounts)
@@ -282,8 +288,12 @@ impl Wallet {
                     .await?;
 
                 (
-                    amount.map(|a| a + fee_to_redeem),
-                    change_amount - fee_to_redeem,
+                    amount
+                        .map(|a| a.checked_add(fee_to_redeem).ok_or(Error::AmountOverflow))
+                        .transpose()?,
+                    change_amount
+                        .checked_sub(fee_to_redeem)
+                        .ok_or(Error::InsufficientFunds)?,
                 )
             }
             false => (amount, change_amount),
@@ -292,7 +302,9 @@ impl Wallet {
         let derived_secret_count;
 
         // Calculate total secrets needed for atomic counter reservation
-        let send_count = *send_amount.unwrap_or(Amount::ZERO).as_ref() as u32;
+        // Each secret corresponds to one proof of the given denomination
+        let send_count = (*send_amount.unwrap_or(Amount::ZERO).as_ref()
+            / (*denomination.as_ref()).max(1)) as u32;
         let change_count = change_amount
             .split_targeted(&change_split_target, &fee_and_amounts)?
             .len() as u32;
