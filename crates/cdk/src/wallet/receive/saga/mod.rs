@@ -285,6 +285,7 @@ impl<'a> ReceiveSaga<'a, Prepared> {
                 None,
                 false,
                 &fee_breakdown,
+                true, // skip_reserve: proofs already stored as Pending by this saga
             )
             .await?;
 

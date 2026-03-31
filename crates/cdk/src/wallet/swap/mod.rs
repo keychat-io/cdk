@@ -49,7 +49,50 @@ impl Wallet {
         spending_conditions: Option<SpendingConditions>,
         include_fees: bool,
     ) -> Result<Option<Proofs>, Error> {
-        tracing::info!("Swapping");
+        self.swap_internal(
+            amount,
+            amount_split_target,
+            input_proofs,
+            spending_conditions,
+            include_fees,
+            false,
+        )
+        .await
+    }
+
+    /// Swap proofs without reserving them first.
+    ///
+    /// Used by parent sagas (e.g. melt) that have already reserved the proofs.
+    #[instrument(skip(self, input_proofs))]
+    pub(crate) async fn swap_no_reserve(
+        &self,
+        amount: Option<Amount>,
+        amount_split_target: SplitTarget,
+        input_proofs: Proofs,
+        spending_conditions: Option<SpendingConditions>,
+        include_fees: bool,
+    ) -> Result<Option<Proofs>, Error> {
+        self.swap_internal(
+            amount,
+            amount_split_target,
+            input_proofs,
+            spending_conditions,
+            include_fees,
+            true,
+        )
+        .await
+    }
+
+    async fn swap_internal(
+        &self,
+        amount: Option<Amount>,
+        amount_split_target: SplitTarget,
+        input_proofs: Proofs,
+        spending_conditions: Option<SpendingConditions>,
+        include_fees: bool,
+        skip_reserve: bool,
+    ) -> Result<Option<Proofs>, Error> {
+        tracing::info!("Swapping (skip_reserve={})", skip_reserve);
 
         let saga = SwapSaga::new(self);
         let saga = saga
@@ -59,6 +102,7 @@ impl Wallet {
                 input_proofs,
                 spending_conditions,
                 include_fees,
+                skip_reserve,
             )
             .await?;
         let saga = saga.execute().await?;
@@ -80,14 +124,17 @@ impl Wallet {
         spending_conditions: Option<SpendingConditions>,
         include_fees: bool,
         proofs_fee_breakdown: &ProofsFeeBreakdown,
+        skip_reserve: bool,
     ) -> Result<PreSwap, Error> {
-        tracing::info!("Creating swap");
+        tracing::info!("Creating swap (skip_reserve={})", skip_reserve);
 
         // Desired amount is either amount passed or value of all proof
         let proofs_total = proofs.total_amount()?;
 
-        let ys: Vec<PublicKey> = proofs.ys()?;
-        self.localstore.reserve_proofs(ys, operation_id).await?;
+        if !skip_reserve {
+            let ys: Vec<PublicKey> = proofs.ys()?;
+            self.localstore.reserve_proofs(ys, operation_id).await?;
+        }
 
         let total_to_subtract = amount
             .unwrap_or(Amount::ZERO)
@@ -249,8 +296,9 @@ impl Wallet {
         amount: Option<Amount>,
         proofs: Proofs,
         include_fees: bool,
+        skip_reserve: bool,
     ) -> Result<PreSwap, Error> {
-        tracing::info!("Creating swap denomination");
+        tracing::info!("Creating swap denomination (skip_reserve={})", skip_reserve);
         let active_keyset_id = self.get_active_keyset().await?.id;
         let fee_and_amounts = self
             .get_keyset_fees_and_amounts_by_id(active_keyset_id)
@@ -258,8 +306,10 @@ impl Wallet {
 
         let proofs_total = proofs.total_amount()?;
 
-        let ys: Vec<PublicKey> = proofs.ys()?;
-        self.localstore.reserve_proofs(ys, operation_id).await?;
+        if !skip_reserve {
+            let ys: Vec<PublicKey> = proofs.ys()?;
+            self.localstore.reserve_proofs(ys, operation_id).await?;
+        }
 
         let fee = self.get_proofs_fee(&proofs).await?;
 

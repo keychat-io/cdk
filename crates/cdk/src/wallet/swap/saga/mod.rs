@@ -93,6 +93,7 @@ impl<'a> SwapSaga<'a, Initial> {
         input_proofs: Proofs,
         spending_conditions: Option<SpendingConditions>,
         include_fees: bool,
+        skip_reserve: bool,
     ) -> Result<SwapSaga<'a, Prepared>, Error> {
         tracing::info!(
             "Preparing swap with operation {}",
@@ -121,6 +122,7 @@ impl<'a> SwapSaga<'a, Initial> {
                 spending_conditions.clone(),
                 include_fees,
                 &fee_breakdown,
+                skip_reserve,
             )
             .await?;
 
@@ -207,6 +209,7 @@ impl<'a> SwapSaga<'a, Initial> {
                 amount,
                 input_proofs.clone(),
                 include_fees,
+                false,
             )
             .await?;
 
