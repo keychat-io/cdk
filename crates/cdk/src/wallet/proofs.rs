@@ -103,16 +103,26 @@ impl Wallet {
         Ok(())
     }
 
-    /// NUT-07 Check the state of a [`Proof`] with the mint
+    /// NUT-07 Check the state of a [`Proof`] with the mint.
+    /// Proofs are checked in batches to avoid exceeding mint request size limits.
     #[instrument(skip(self, proofs))]
     pub async fn check_proofs_spent(&self, proofs: Proofs) -> Result<Vec<ProofState>, Error> {
-        let spendable = self
-            .client
-            .post_check_state(CheckStateRequest { ys: proofs.ys()? })
-            .await?;
+        const BATCH_SIZE: usize = 64;
 
-        let spent_ys: Vec<_> = spendable
-            .states
+        let ys = proofs.ys()?;
+        let mut all_states: Vec<ProofState> = Vec::with_capacity(ys.len());
+
+        for chunk in ys.chunks(BATCH_SIZE) {
+            let spendable = self
+                .client
+                .post_check_state(CheckStateRequest {
+                    ys: chunk.to_vec(),
+                })
+                .await?;
+            all_states.extend(spendable.states);
+        }
+
+        let spent_ys: Vec<_> = all_states
             .iter()
             .filter_map(|p| match p.state {
                 State::Spent => Some(p.y),
@@ -122,12 +132,15 @@ impl Wallet {
 
         self.localstore.update_proofs(vec![], spent_ys).await?;
 
-        Ok(spendable.states)
+        Ok(all_states)
     }
 
-    /// Checks all proofs against the mint to reconcile local and remote states
+    /// Checks all proofs against the mint to reconcile local and remote states.
+    /// Proofs are checked in batches to avoid exceeding mint request size limits.
     #[instrument(skip(self))]
     pub async fn check_proofs_from_mint(&self) -> Result<(), Error> {
+        const BATCH_SIZE: usize = 64;
+
         let proofs = self
             .localstore
             .get_proofs(
@@ -147,19 +160,23 @@ impl Wallet {
             return Ok(());
         }
 
-        let spendable = self
-            .client
-            .post_check_state(CheckStateRequest {
-                ys: proofs
-                    .clone()
-                    .into_iter()
-                    .map(|p| p.proof)
-                    .collect::<Vec<_>>()
-                    .ys()?,
-            })
-            .await?;
+        let all_ys: Vec<PublicKey> = proofs
+            .clone()
+            .into_iter()
+            .map(|p| p.proof)
+            .collect::<Vec<_>>()
+            .ys()?;
 
-        let states = spendable.states;
+        let mut states: Vec<ProofState> = Vec::with_capacity(all_ys.len());
+        for chunk in all_ys.chunks(BATCH_SIZE) {
+            let resp = self
+                .client
+                .post_check_state(CheckStateRequest {
+                    ys: chunk.to_vec(),
+                })
+                .await?;
+            states.extend(resp.states);
+        }
 
         let server_state_map: HashMap<PublicKey, State> =
             states.iter().map(|s| (s.y, s.state)).collect();
